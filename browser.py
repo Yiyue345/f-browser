@@ -61,6 +61,10 @@ class BrowserController:
         self._recovery_attempted = False
         self._manual_login_seen = False
         self._manual_verify_pending = False
+        self._autofill_pending = False
+        self._autofill_submitted = False
+        self._autofill_started = 0.0
+        self._autofill_next_try = 0.0
         self._allow_auto_recovery = False
         self._user_logout = False
         self._dirty = False
@@ -218,6 +222,10 @@ class BrowserController:
         self._recovery_attempted = False
         self._manual_login_seen = False
         self._manual_verify_pending = False
+        self._autofill_pending = False
+        self._autofill_submitted = False
+        self._autofill_started = 0.0
+        self._autofill_next_try = 0.0
         self._user_logout = False
         self._set(running=True, message="浏览器已打开", recovery="idle")
 
@@ -254,6 +262,10 @@ class BrowserController:
         if _gateway_login_url(url):
             self._manual_login_seen = True
             self._needs_recovery = True
+            if not self._autofill_submitted:
+                self._autofill_pending = True
+                if not self._autofill_started:
+                    self._autofill_started = time.monotonic()
         try:
             safe = safe_history_url(url)
         except Exception:
@@ -340,6 +352,8 @@ class BrowserController:
         if self._page is None:
             return
         self._poll_page()
+        if self._autofill_pending:
+            self._maybe_submit_saved_login()
         if self._user_logout:
             # Gateway logout explicitly triggered by the user in Chromium.
             self._user_logout = False
@@ -366,6 +380,60 @@ class BrowserController:
             if not self._save():
                 self._shutdown(save=False)
                 self._set(message="WebVPN 会话或账号已切换，已关闭旧窗口以保护新的登录状态", recovery="failed")
+
+    def _maybe_submit_saved_login(self) -> None:
+        """Use the host's saved credentials in the *visible* CAS window.
+
+        Only the trusted WebVPN broker can read the credential store; this
+        plugin receives an outcome string, never the username or password.
+        Called exclusively on the owning Playwright thread.
+        """
+        if self._page is None or self._page.is_closed():
+            self._autofill_pending = False
+            return
+        if not _gateway_login_url(self._page.url):
+            self._autofill_pending = False
+            return
+        now = time.monotonic()
+        if now < self._autofill_next_try:
+            return
+        if now - self._autofill_started > 15:
+            self._autofill_pending = False
+            self._set(message="统一登录表单尚未就绪，请在 Chromium 中手动登录", recovery="verification_required")
+            return
+        submit = getattr(self.session, "submit_saved_login", None)
+        if not callable(submit):
+            self._autofill_pending = False
+            self._set(
+                message="当前主仓尚未提供 WebVPN 自动填写接口，请更新主仓，或在 Chromium 中手动登录",
+                recovery="login_required",
+            )
+            return
+        try:
+            outcome = submit(self._page)
+        except Exception:
+            self._autofill_pending = False
+            self._set(message="自动填写登录信息失败，请在 Chromium 中手动登录", recovery="failed")
+            return
+        if outcome == "submitted":
+            self._autofill_pending = False
+            self._autofill_submitted = True
+            self._set(
+                message="已使用主仓保存的账号提交统一身份认证；如要求短信或验证码请在 Chromium 完成",
+                recovery="login_required",
+            )
+        elif outcome in {"busy", "not_ready"}:
+            self._autofill_next_try = now + 1
+        else:
+            self._autofill_pending = False
+            hints = {
+                "verification_required": "学校要求验证码或人工验证，请在 Chromium 中继续",
+                "no_credentials": "主仓尚未保存统一账号，请先在账户设置中保存后重新连接",
+                "credentials_unavailable": "主仓已保存的统一账号无法读取，请在账户设置中重新保存",
+                "logged_out": "WebVPN 已主动退出，请先点击重新连接",
+                "not_cas": "当前不是允许自动填写的 CAS 登录页，请手动完成登录",
+            }
+            self._set(message=hints.get(outcome, "无法自动填写统一账号，请手动登录"), recovery="login_required")
 
     def _recover_if_expired(self) -> None:
         """Start gateway validation off the Playwright controller thread.
@@ -493,6 +561,10 @@ class BrowserController:
         self._recovery_attempted = False
         self._manual_login_seen = False
         self._manual_verify_pending = False
+        self._autofill_pending = False
+        self._autofill_submitted = False
+        self._autofill_started = 0.0
+        self._autofill_next_try = 0.0
         self._recovery_future = None
         self._set(
             running=False, url="", title="", can_back=False, can_forward=False,
