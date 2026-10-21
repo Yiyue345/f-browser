@@ -1,0 +1,70 @@
+name: Publish alpha
+
+on:
+  push:
+    branches: ["dev"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: f-browser-alpha-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  alpha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifest, Python, and HTML template
+        run: |
+          python -m pip install packaging jinja2
+          python -m compileall -q __init__.py plugin.py browser.py history.py routes.py scripts tests
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jinja2 import Environment
+          manifest = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
+          assert manifest["id"] == "webvpn_browser"
+          Environment().parse(Path("templates/f_browser/index.html").read_text(encoding="utf-8"))
+          PY
+      - name: Resolve alpha version
+        id: version
+        shell: python
+        run: |
+          import json, os
+          from pathlib import Path
+          version = json.loads(Path("plugin.json").read_text(encoding="utf-8"))["version"]
+          base = version.split("-", 1)[0]
+          version = f"{base}-alpha.{os.environ['GITHUB_RUN_NUMBER']}"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as out:
+              out.write(f"version={version}\n")
+              out.write(f"tag=v{version}\n")
+      - name: Build and validate Registry v1 artifact
+        id: artifact
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          python scripts/build_registry_artifact.py "$VERSION"
+          sha256sum -c "webvpn_browser-$VERSION.zip.sha256"
+          echo "asset=webvpn_browser-$VERSION.zip" >> "$GITHUB_OUTPUT"
+      - name: Release alpha
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          ASSET="${{ steps.artifact.outputs.asset }}"
+          SHA="${{ github.sha }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Alpha release already exists: $TAG"
+            exit 0
+          fi
+          git tag "$TAG" "$SHA"
+          git push origin "$TAG"
+          gh release create "$TAG" "$ASSET" "$ASSET.sha256" \
+            --target "$SHA" --title "$TAG" \
+            --notes "Development alpha built from dev at $SHA. Not production-ready." \
+            --prerelease
