@@ -2,7 +2,7 @@ name: Test plugin
 
 on:
   push:
-    branches: ["main", "plugin-management"]
+    branches: ["main", "dev", "plugin-management"]
   pull_request:
   workflow_dispatch:
 
