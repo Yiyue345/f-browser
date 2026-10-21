@@ -90,15 +90,18 @@ def build_router(context) -> APIRouter:
         _assert_same_origin_action(request)
 
         def worker(progress):
-            progress(5, "正在使用主程序的统一账号恢复 WebVPN")
-            current = session.reconnect(interactive_allowed=True)
-            if not current.is_authenticated:
-                raise RuntimeError(f"无法完成学校统一认证：{current.reason}")
+            # Reconnect is an explicit user action, not another 90-second
+            # headless CAS retry. Move the challenge into the visible Chromium
+            # window and let the user complete the school's own login form.
+            progress(10, "正在关闭旧窗口并准备新的 WebVPN 登录")
             browser.send("reset", timeout=40)
-            progress(100, "WebVPN 已重新连接")
+            session.authorize_login()
+            progress(50, "正在打开可交互的 Chromium 登录窗口")
+            browser.send("open", timeout=40)
+            progress(100, "登录窗口已打开，请在 Chromium 内完成学校认证")
             return "/f-browser"
 
-        return {"task_id": tasks.start("WebVPN：交互式重新连接", worker).id}
+        return {"task_id": tasks.start("WebVPN：打开交互式登录窗口", worker).id}
 
     @router.get("/api/f-browser/history")
     def history():
