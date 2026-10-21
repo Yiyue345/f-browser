@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import sys
+import threading
+import time
 import tempfile
 import types
 import unittest
@@ -170,6 +172,12 @@ class FakeSession:
         self.saves = 0
         self.logouts = 0
 
+    def get_status(self):
+        return SimpleNamespace(
+            is_authenticated=self.state == "authenticated",
+            state=self.state, reason=self.state,
+        )
+
     def ensure_authenticated(self, interactive_allowed=False):
         self.auth_calls += 1
         return SimpleNamespace(
@@ -203,6 +211,15 @@ class FakeStore:
 
 
 class BrowserControllerTests(unittest.TestCase):
+    @staticmethod
+    def wait_until(predicate, timeout=2):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(.01)
+        return bool(predicate())
+
     def make(self):
         session = FakeSession()
         store = FakeStore()
@@ -249,7 +266,7 @@ class BrowserControllerTests(unittest.TestCase):
             page.goto("https://cas.guet.edu.cn/authserver/login")
             worker._idle()
             self.assertEqual(session.verify_calls, 1)
-            self.assertEqual(session.auth_calls, 1)
+            self.assertEqual(session.auth_calls, 0)
             self.assertEqual(len(session.browser.contexts), 1)
         finally:
             worker.stop()
@@ -264,8 +281,13 @@ class BrowserControllerTests(unittest.TestCase):
             # Event processing in this offline fake is synchronous.
             page.goto("https://v.guet.edu.cn/login")
             worker._idle()
+            self.assertTrue(self.wait_until(
+                lambda: session.auth_calls == 1 and worker._recovery_future is not None
+                and worker._recovery_future.done()
+            ))
+            worker._idle()
             self.assertEqual(session.verify_calls, 1)
-            self.assertEqual(session.auth_calls, 2)
+            self.assertEqual(session.auth_calls, 1)
             self.assertEqual(len(session.browser.contexts), 2)
             self.assertEqual(session.browser.contexts[-1].page.url,
                              "https://v.guet.edu.cn/https/course")
@@ -285,7 +307,11 @@ class BrowserControllerTests(unittest.TestCase):
             page.goto("https://v.guet.edu.cn/login")
             worker._last_document_method = "POST"
             worker._idle()
-            self.assertEqual(session.auth_calls, 2)
+            self.assertTrue(self.wait_until(
+                lambda: worker._recovery_future is not None and worker._recovery_future.done()
+            ))
+            worker._idle()
+            self.assertEqual(session.auth_calls, 1)
             self.assertEqual(session.browser.contexts[-1].page.loads, [])
         finally:
             worker.stop()
@@ -318,14 +344,89 @@ class BrowserControllerTests(unittest.TestCase):
         finally:
             worker.stop()
 
-    def test_login_required_keeps_browser_closed(self):
+    def test_initial_login_required_opens_visible_browser_without_headless_auth(self):
         worker, session, _ = self.make()
         session.state = "login_required"
         try:
-            with self.assertRaisesRegex(browser.BrowserError, "请使用"):
+            response = worker.send("open")
+            self.assertTrue(response["running"])
+            self.assertEqual(session.auth_calls, 0)
+            self.assertIn("完成学校", response["message"])
+            self.assertEqual(len(session.browser.contexts), 1)
+        finally:
+            worker.stop()
+
+    def test_explicit_logged_out_requires_user_reconnect(self):
+        worker, session, _ = self.make()
+        session.state = "logged_out"
+        try:
+            with self.assertRaisesRegex(browser.BrowserError, "重新连接"):
                 worker.send("open")
             self.assertEqual(len(session.browser.contexts), 0)
         finally:
+            worker.stop()
+
+    def test_overlapping_open_returns_immediately_instead_of_queueing(self):
+        worker, session, _ = self.make()
+        entered = threading.Event()
+        release = threading.Event()
+        original = session.get_status
+
+        def slow_status():
+            entered.set()
+            release.wait(3)
+            return original()
+
+        session.get_status = slow_status
+        outcome = []
+
+        def caller():
+            try:
+                outcome.append(worker.send("open", timeout=5))
+            except Exception as exc:
+                outcome.append(exc)
+
+        running = threading.Thread(target=caller)
+        running.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            started = time.monotonic()
+            with self.assertRaisesRegex(browser.BrowserError, "正在执行"):
+                worker.send("navigate", "https://v.guet.edu.cn/https/other", timeout=5)
+            self.assertLess(time.monotonic() - started, .5)
+        finally:
+            release.set()
+            running.join(timeout=3)
+            worker.stop()
+        self.assertEqual(len(outcome), 1)
+        self.assertIsInstance(outcome[0], dict)
+
+    def test_gateway_recovery_does_not_block_browser_commands(self):
+        worker, session, _ = self.make()
+        entered, release = threading.Event(), threading.Event()
+        original = session.verify
+
+        def slow_verify():
+            entered.set()
+            release.wait(3)
+            return original()
+
+        session.verify = slow_verify
+        try:
+            worker.send("open")
+            session.browser.contexts[-1].page.goto("https://v.guet.edu.cn/login")
+            worker._idle()
+            self.assertTrue(entered.wait(1))
+            started = time.monotonic()
+            with self.assertRaisesRegex(browser.BrowserError, "恢复登录"):
+                worker.send("navigate", "https://v.guet.edu.cn/")
+            self.assertLess(time.monotonic() - started, .5)
+            # Browser shutdown is still independent of a slow WebVPN probe.
+            started = time.monotonic()
+            worker.send("close", timeout=2)
+            self.assertLess(time.monotonic() - started, 1)
+        finally:
+            release.set()
             worker.stop()
 
     def test_gateway_logout_in_browser_invalidates_shared_session(self):
