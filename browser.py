@@ -366,11 +366,8 @@ class BrowserController:
             if self._allow_auto_recovery and not self._recovery_attempted:
                 self._recovery_attempted = True
                 self._recover_if_expired()
-            elif not self._allow_auto_recovery:
-                self._set(
-                    recovery="login_required",
-                    message="请在 Chromium 窗口中完成学校统一身份认证，页面不会被后台登录任务阻塞",
-                )
+            # For first-time CAS authentication the autofill handler owns
+            # the status message. Do not overwrite the saved-login outcome.
         self._finish_recovery()
         if self._manual_verify_pending and self._recovery_future is None:
             self._manual_verify_pending = False
