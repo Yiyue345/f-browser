@@ -60,7 +60,7 @@ class BrowserController:
         self._recovery_attempted = False
         self._user_logout = False
         self._dirty = False
-        self._page_hooked = False
+        self._observed_pages: set = set()
         self._last_save = 0.0
 
     def state(self) -> dict:
@@ -173,8 +173,8 @@ class BrowserController:
         # Target=_blank is common on WebVPN portals. Follow the newest
         # Chromium page instead of silently ignoring a newly opened tab.
         self._context.on("page", self._attach_page)
-        self._page = self._context.new_page()
-        self._attach_page(self._page) if not getattr(self, "_page_hooked", False) else None
+        page = self._context.new_page()
+        self._attach_page(page)
         self._positions, self._cursor = [], -1
         self._dirty = False
         self._needs_recovery = False
@@ -189,24 +189,21 @@ class BrowserController:
             self._safe_get_url = GATEWAY_URL
             self._last_document_method = "GET"
             self._recovery_attempted = False
-        if getattr(page, "_fc_webvpn_hooked", False):
+        if page in self._observed_pages:
             return
+        self._observed_pages.add(page)
         page.on("request", self._request_seen)
         page.on("framenavigated", self._navigation_seen)
-        # Avoid relying exclusively on a private page attribute: in mocked
-        # contexts, the page event may not be emitted for the first tab.
-        try:
-            page._fc_webvpn_hooked = True
-        except Exception:
-            pass
-        self._page_hooked = True
 
     def _request_seen(self, request) -> None:
         try:
             if request.is_navigation_request() and request.frame == self._page.main_frame:
                 self._last_document_method = request.method.upper()
                 parts = urlsplit(request.url)
-                if parts.hostname == _GATEWAY_HOST and parts.path.lower().startswith("/logout"):
+                gateway_logout = parts.path.lower() in {"/logout", "/logout/"} or (
+                    parts.path.lower().startswith("/wengine-auth/logout")
+                )
+                if parts.hostname == _GATEWAY_HOST and gateway_logout:
                     self._user_logout = True
         except Exception:
             pass
@@ -359,7 +356,7 @@ class BrowserController:
             self._save()
         context = self._context
         self._page, self._context = None, None
-        self._page_hooked = False
+        self._observed_pages.clear()
         if context is not None:
             try:
                 context.close()
