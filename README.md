@@ -53,6 +53,22 @@ f-browser/
 └── scripts/build_registry_artifact.py
 ```
 
+## Alpha 发布策略
+
+普通提交到 `dev` **只执行 Test plugin CI，不会创建新的 GitHub Release 或版本号**。
+这样可以在一次调试中连续提交修复，不会每提交一次就留下一个 Alpha。
+
+需要给测试人员安装一个新的 Alpha 时，手动在 GitHub 打开
+[Actions → Publish alpha](https://github.com/Yiyue345/f-browser/actions/workflows/alpha.yml)，
+点击 **Run workflow**，勾选 `publish`，再确认运行。
+工作流始终拉取当时最新的 `dev` 提交，重新运行单元测试、
+Jinja 校验、插件 ZIP 与 SHA-256 检查，成功后才生成一个 `v0.1.0-alpha.N` 预发布。
+若该提交已发布过 Alpha，则跳过重复发布。Alpha 序号只按实际发布过的版本递增。
+
+该工作流也存在于 `main`，只是为了让 GitHub 显示手动执行按钮；
+它**只打包 dev，不会合并代码，不会触发 Beta**。 `main` 的 Beta 发布规则不受影响。
+之前已经生成的 Alpha 记录不会自动删除，以免破坏已有下载链接。
+
 ## 本地验证
 
 ```bash
