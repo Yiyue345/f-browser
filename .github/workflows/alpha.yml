@@ -1,23 +1,37 @@
 name: Publish alpha
 
+# Alpha releases are intentionally opt-in. Every dev push is covered by
+# "Test plugin"; no GitHub Release is created by ordinary commits.
+#
+# workflow_dispatch is delivered only for workflows present on the default
+# branch. The identical workflow is kept in main as a dispatcher, but always
+# checks out and publishes dev, never main.
 on:
-  push:
-    branches: ["dev"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "确认从 dev 最新提交发布一个 Alpha（不勾选则不运行）"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: f-browser-alpha-${{ github.ref }}
+  group: f-browser-alpha-release
   cancel-in-progress: false
 
 jobs:
   alpha:
+    if: ${{ inputs.publish == true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate manifest, Python, and HTML template
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Validate dev before publishing
         run: |
           python -m pip install packaging jinja2
           python -m compileall -q __init__.py plugin.py browser.py history.py gateway_status.py routes.py scripts tests
@@ -28,43 +42,79 @@ jobs:
           from jinja2 import Environment
           manifest = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
           assert manifest["id"] == "webvpn_browser"
+          assert manifest["execution"] == "in_process"
           Environment().parse(Path("templates/f_browser/index.html").read_text(encoding="utf-8"))
           PY
-      - name: Resolve alpha version
+      - name: Choose next actual Alpha release number
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: python
         run: |
-          import json, os
+          import json
+          import os
+          import re
+          import subprocess
           from pathlib import Path
-          version = json.loads(Path("plugin.json").read_text(encoding="utf-8"))["version"]
-          base = version.split("-", 1)[0]
-          version = f"{base}-alpha.{os.environ['GITHUB_RUN_NUMBER']}"
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as out:
-              out.write(f"version={version}\n")
-              out.write(f"tag=v{version}\n")
-      - name: Build and validate Registry v1 artifact
+
+          base = json.loads(Path("plugin.json").read_text(encoding="utf-8"))["version"].split("-", 1)[0]
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          query = subprocess.check_output(
+              [
+                  "gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/releases",
+                  "--paginate", "--jq",
+                  ".[] | [.tag_name, .target_commitish] | @tsv",
+              ],
+              text=True,
+          )
+          versions = []
+          seen_head = False
+          pattern = re.compile(r"^v" + re.escape(base) + r"-alpha\.(\d+)$")
+          for line in query.splitlines():
+              fields = line.split("\t")
+              if len(fields) != 2:
+                  continue
+              match = pattern.fullmatch(fields[0])
+              if match:
+                  versions.append(int(match.group(1)))
+                  if fields[1] == head:
+                      seen_head = True
+
+          number = max(versions, default=0) + 1
+          version = f"{base}-alpha.{number}"
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as file:
+              file.write(f"skip={'true' if seen_head else 'false'}\n")
+              file.write(f"version={version}\n")
+              file.write(f"tag=v{version}\n")
+              file.write(f"head={head}\n")
+          print(
+              f"Latest dev SHA: {head}. "
+              + ("This commit already has an Alpha; skipping." if seen_head else f"Publishing {version}")
+          )
+      - name: Build and verify Registry v1 ZIP
+        if: steps.version.outputs.skip != 'true'
         id: artifact
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           python scripts/build_registry_artifact.py "$VERSION"
           sha256sum -c "webvpn_browser-$VERSION.zip.sha256"
           echo "asset=webvpn_browser-$VERSION.zip" >> "$GITHUB_OUTPUT"
-      - name: Release alpha
+      - name: Publish a single Alpha prerelease
+        if: steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.version.outputs.tag }}"
           ASSET="${{ steps.artifact.outputs.asset }}"
-          SHA="${{ github.sha }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Alpha release already exists: $TAG"
-            exit 0
-          fi
+          SHA="${{ steps.version.outputs.head }}"
           git tag "$TAG" "$SHA"
           git push origin "$TAG"
           gh release create "$TAG" "$ASSET" "$ASSET.sha256" \
             --target "$SHA" --title "$TAG" \
-            --notes "Development alpha built from dev at $SHA. Not production-ready." \
+            --notes "Manually approved Alpha from dev at $SHA. Not production-ready." \
             --prerelease
