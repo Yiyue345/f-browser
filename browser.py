@@ -208,8 +208,8 @@ class BrowserController:
         self._goto(url)
         if not status.is_authenticated:
             self._set(
-                message="内嵌浏览器已打开。正在检测统一登录；需要验证码时直接在页面内操作。",
-                recovery="login_required",
+                message="已打开内嵌浏览器，正在确认共享的 WebVPN 登录状态；需要验证码时请在页面内操作。",
+                recovery="idle",
             )
 
     def _build_context(self) -> None:
@@ -413,6 +413,13 @@ class BrowserController:
         if self._page is None:
             return
         self._poll_page()
+        # The separate gateway verifier can authenticate an existing shared
+        # academic WebVPN session after this Chromium context was opened.
+        # Observe that result without navigating or invoking a new login.
+        if not self._allow_auto_recovery and self.session.get_status().is_authenticated:
+            self._allow_auto_recovery = True
+            if self._state.get("recovery") in {"login_required", "checking"}:
+                self._set(recovery="idle", message="已确认现有 WebVPN 网关会话有效")
         if self._autofill_pending:
             self._maybe_submit_saved_login()
         if self._user_logout:
