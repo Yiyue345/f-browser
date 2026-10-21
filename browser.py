@@ -63,6 +63,7 @@ class BrowserController:
         self._user_logout = False
         self._dirty = False
         self._observed_pages: set = set()
+        self._recovery_future: Future | None = None
         self._last_save = 0.0
 
     def state(self) -> dict:
@@ -79,6 +80,10 @@ class BrowserController:
         with self._lock:
             if self._command_inflight:
                 raise BrowserError("已有浏览器操作正在执行，请等待当前任务结束，不要重复点击")
+            if self._state.get("recovery") in {"checking", "recovering"} and command in {
+                "open", "navigate", "back", "forward", "reload"
+            }:
+                raise BrowserError("WebVPN 正在后台验证或恢复登录，请等待完成后再导航")
             self._command_inflight = True
             self._state["busy"] = True
             try:
@@ -331,42 +336,86 @@ class BrowserController:
             self.session.clear_session()
             self._set(message="WebVPN 已主动退出，请手动重新连接", recovery="logged_out")
             return
-        if self._needs_recovery and not self._recovery_attempted:
+        if self._needs_recovery:
             self._needs_recovery = False
-            self._recovery_attempted = True
-            self._recover_if_expired()
+            if self._allow_auto_recovery and not self._recovery_attempted:
+                self._recovery_attempted = True
+                self._recover_if_expired()
+            elif not self._allow_auto_recovery:
+                self._set(
+                    recovery="login_required",
+                    message="请在 Chromium 窗口中完成学校统一身份认证，页面不会被后台登录任务阻塞",
+                )
+        self._finish_recovery()
         if time.monotonic() - self._last_save >= 12:
             if not self._save():
                 self._shutdown(save=False)
                 self._set(message="WebVPN 会话或账号已切换，已关闭旧窗口以保护新的登录状态", recovery="failed")
 
     def _recover_if_expired(self) -> None:
-        # A CAS redirect might be a target application's separate CAS login.
-        # Only a gateway probe is authoritative; 403 on an internal site is not.
-        status = self.session.verify()
-        if status.state not in ("expired", "login_required"):
-            self._set(recovery=status.state if status.state != "authenticated" else "idle")
+        """Start gateway validation off the Playwright controller thread.
+
+        A broker login can wait for CAS/OTP for over a minute. It must not
+        monopolize this controller or make subsequent browser commands queue.
+        Only the controller thread itself ever touches Playwright page objects.
+        """
+        self._set(recovery="checking", message="检测到登录跳转，正在独立验证 WebVPN 网关")
+        result: Future = Future()
+        self._recovery_future = result
+
+        def work() -> None:
+            try:
+                status = self.session.verify()
+                if status.state not in {"expired", "login_required"}:
+                    result.set_result((False, status))
+                    return
+                recovered = self.session.ensure_authenticated(interactive_allowed=False)
+                result.set_result((True, recovered))
+            except Exception:
+                # Do not include sensitive URL, cookies or CAS data in errors.
+                result.set_exception(BrowserError("WebVPN 网关会话验证或恢复出错，请尝试手动重新连接"))
+
+        threading.Thread(
+            target=work, daemon=True, name="f-browser-webvpn-recovery"
+        ).start()
+
+    def _finish_recovery(self) -> None:
+        future = self._recovery_future
+        if future is None or not future.done():
             return
-        self._set(recovery="recovering", message="WebVPN 网关会话过期，正在恢复认证")
-        result = self.session.ensure_authenticated(interactive_allowed=False)
+        self._recovery_future = None
+        try:
+            expired, result = future.result()
+        except Exception:
+            self._set(recovery="failed", message="WebVPN 恢复失败，请手动重新连接")
+            return
+        if not expired:
+            self._set(
+                recovery="idle" if result.is_authenticated else result.state,
+                message="网关登录仍有效" if result.is_authenticated else result.reason,
+            )
+            return
         if not result.is_authenticated:
-            self._set(recovery=result.state, message=result.reason)
+            self._set(recovery=result.state, message=(
+                f"WebVPN 自动恢复未完成：{result.reason}。"
+                "请在浏览器中完成学校认证，或点击「重新连接」"
+            ))
             return
         target = self._safe_get_url if self._last_document_method == "GET" else ""
-        # Discard stale context without committing old credentials.
+        # The new Context acquires the freshly committed generation/cookies.
+        # Never save the expired context after account switching.
         self._close_context(save=False)
         self._build_context()
-        # One verified recovery attempt per auth redirect; another immediate
-        # CAS redirect must not start an infinite authenticate/reload cycle.
+        # A second CAS redirect must not initiate an infinite retry loop.
         self._recovery_attempted = True
         if target:
             try:
                 self._page.goto(target, wait_until="domcontentloaded", timeout=25000)
-                self._set(recovery="idle", message="WebVPN 已恢复，安全页面已重新打开")
+                self._set(recovery="idle", message="WebVPN 会话已恢复，安全 GET 页面已重新打开")
             except Exception:
-                self._set(recovery="failed", message="登录已恢复，但原网页打开失败；请手动刷新")
+                self._set(recovery="failed", message="会话已恢复，但原网页无法打开，请手动刷新")
         else:
-            self._set(recovery="idle", message="WebVPN 已恢复；表单提交不会自动重放，请手动继续")
+            self._set(recovery="idle", message="WebVPN 会话已恢复；不会自动重新提交表单")
 
     def _save(self) -> bool:
         if self._context is None:
