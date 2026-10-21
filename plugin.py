@@ -14,11 +14,13 @@ ROOT = Path(__file__).resolve().parent
 def setup_services(context: PluginContext) -> None:
     from .browser import BrowserController
     from .history import HistoryStore
+    from .gateway_status import GatewayStatusChecker
 
     store = HistoryStore(Path(context.config.data_dir) / "plugins" / "webvpn_browser" / "browser.sqlite3")
     session = context.services.get("webvpn_session")
     context.services.add("f_browser_store", store)
     context.services.add("f_browser", BrowserController(session, store))
+    context.services.add("f_browser_gateway_status", GatewayStatusChecker(session))
 
 
 def build_routes(context: PluginContext):
