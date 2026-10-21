@@ -355,6 +355,52 @@ class BrowserControllerTests(unittest.TestCase):
         finally:
             worker.stop()
 
+    def test_manual_cas_completion_updates_broker_without_headless_login(self):
+        worker, session, _ = self.make()
+        session.state = "login_required"
+        session.verify_state = "authenticated"
+        try:
+            worker.send("open")
+            page = session.browser.contexts[-1].page
+            # School redirects to CAS, user types SMS/CAPTCHA in Chromium,
+            # then returns to the WebVPN gateway.
+            page.goto("https://cas.guet.edu.cn/authserver/login")
+            page.goto("https://v.guet.edu.cn/")
+            self.assertTrue(self.wait_until(
+                lambda: session.verify_calls >= 1 and worker._allow_auto_recovery
+            ))
+            self.assertEqual(session.auth_calls, 0)
+            self.assertGreaterEqual(session.saves, 1)
+            self.assertEqual(worker.state()["recovery"], "idle")
+        finally:
+            worker.stop()
+
+    def test_close_cancels_stale_gateway_recovery_state(self):
+        worker, session, _ = self.make()
+        started = threading.Event()
+        release = threading.Event()
+        original = session.verify
+
+        def stuck_probe():
+            started.set()
+            release.wait(3)
+            return original()
+
+        session.verify = stuck_probe
+        try:
+            worker.send("open")
+            session.browser.contexts[-1].page.goto("https://v.guet.edu.cn/login")
+            self.assertTrue(started.wait(2))
+            closed = worker.send("close")
+            self.assertFalse(closed["running"])
+            self.assertEqual(closed["recovery"], "idle")
+            # A second explicit open must not be rejected as stale "checking".
+            response = worker.send("open")
+            self.assertTrue(response["running"])
+        finally:
+            release.set()
+            worker.stop()
+
     def test_explicit_logged_out_requires_user_reconnect(self):
         worker, session, _ = self.make()
         session.state = "logged_out"
