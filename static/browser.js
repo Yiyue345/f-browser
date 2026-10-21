@@ -94,8 +94,9 @@
       const vpn = response.webvpn || {};
       browserState = current;
       const connected = vpn.state === 'authenticated';
+      const checking = vpn.state === 'checking';
       el('fb-connection-dot').classList.toggle('is-connected', connected);
-      el('fb-connection-text').textContent = vpn.reason || 'WebVPN 状态未知';
+      el('fb-connection-text').textContent = vpn.reason || (checking ? '正在验证 WebVPN 网关' : 'WebVPN 状态未知');
       el('fb-browser-running').textContent = current.running ? '内嵌浏览器已运行' : '内嵌浏览器未启动';
       el('fb-page-title').textContent = current.title || (current.running ? '正在加载' : '尚未打开网页');
       el('fb-page-url').textContent = current.url || current.message || '';
