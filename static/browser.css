@@ -1,0 +1,43 @@
+.fb-app { display: grid; gap: 16px; max-width: 1320px; }
+.fb-app h1,.fb-app h2,.fb-app p { margin: 0; }
+.fb-pagehead { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.fb-pagehead h1 { font-size: 24px; margin: 0 0 6px; }
+.fb-pagehead p { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+.fb-connection { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-soft); min-width: 180px; justify-content: flex-end; }
+.fb-status-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--amber); flex: none; }
+.fb-status-dot.is-connected { background: var(--green); }
+.fb-toolbar, .fb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fb-toolbar { padding: 12px; background: var(--surface, var(--surface-raised)); border: 1px solid var(--border, var(--line)); border-radius: 12px; }
+.fb-navigation { display: flex; gap: 5px; }
+.fb-address { flex: 1 1 360px; min-width: 240px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border, var(--line)); background: var(--surface-hover); border-radius: 9px; padding: 5px 6px 5px 10px; }
+.fb-address input { flex: 1; min-width: 0; color: var(--text); background: transparent; border: 0; outline: none; font-size: 12px; }
+.fb-address:focus-within { outline: 2px solid var(--primary-soft); }
+.fb-actions { gap: 9px; }
+.fb-feedback { border: 1px solid var(--border, var(--line)); padding: 12px 14px; border-radius: 10px; font-size: 12px; color: var(--text); }
+.fb-feedback.is-error { color: var(--red); border-color: var(--red); }
+.fb-content-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr); gap: 16px; }
+.fb-panel { background: var(--surface, var(--surface-raised)); border: 1px solid var(--border, var(--line)); border-radius: 12px; padding: 18px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.fb-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.fb-panel h2 { font-size: 15px; }
+.fb-small { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.fb-document-title { font-size: 17px; font-weight: 650; }
+.fb-page-url { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.fb-preview { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px; padding: 28px; border-radius: 12px; background: var(--surface-hover); }
+.fb-window-symbol { font-size: 32px; color: var(--primary); }
+.fb-preview p:first-of-type { font-weight: 650; }
+.fb-tabs { display: flex; padding: 3px; border-radius: 8px; background: var(--surface-hover); }
+.fb-tab { border: none; background: transparent; color: var(--text-muted); font-size: 12px; padding: 5px 11px; cursor: pointer; border-radius: 6px; }
+.fb-tab.is-active { background: var(--primary-soft); color: var(--primary); }
+.fb-record-tools { display: flex; gap: 8px; }
+.fb-record-tools input { width: 100%; min-width: 0; flex: 1; border: 1px solid var(--border, var(--line)); background: var(--surface-hover); color: var(--text); border-radius: 8px; padding: 7px 9px; font-size: 12px; }
+.fb-record-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 380px; min-height: 120px; }
+.fb-record { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border, var(--line)); }
+.fb-record:last-child { border-bottom: 0; }
+.fb-record-text { min-width: 0; flex: 1; }
+.fb-record-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-record-url { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-record-actions { display: flex; gap: 4px; }
+.fb-record-actions .btn { padding: 6px 8px; }
+.fb-app button:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 900px) { .fb-content-grid { grid-template-columns: 1fr; } .fb-pagehead { flex-direction: column; } .fb-connection { justify-content: flex-start; } }
+@media (max-width: 540px) { .fb-address { flex-basis: 100%; order: -1; } .fb-toolbar { padding: 9px; } .fb-record-tools { flex-wrap: wrap; } .fb-panel { padding: 13px; } }
