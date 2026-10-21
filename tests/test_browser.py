@@ -281,11 +281,11 @@ class BrowserControllerTests(unittest.TestCase):
             # Event processing in this offline fake is synchronous.
             page.goto("https://v.guet.edu.cn/login")
             worker._idle()
+            # Worker polls the future itself; it may already be consumed
+            # before the test thread observes it.
             self.assertTrue(self.wait_until(
-                lambda: session.auth_calls == 1 and worker._recovery_future is not None
-                and worker._recovery_future.done()
+                lambda: session.auth_calls == 1 and len(session.browser.contexts) == 2
             ))
-            worker._idle()
             self.assertEqual(session.verify_calls, 1)
             self.assertEqual(session.auth_calls, 1)
             self.assertEqual(len(session.browser.contexts), 2)
@@ -308,9 +308,8 @@ class BrowserControllerTests(unittest.TestCase):
             worker._last_document_method = "POST"
             worker._idle()
             self.assertTrue(self.wait_until(
-                lambda: worker._recovery_future is not None and worker._recovery_future.done()
+                lambda: session.auth_calls == 1 and len(session.browser.contexts) == 2
             ))
-            worker._idle()
             self.assertEqual(session.auth_calls, 1)
             self.assertEqual(session.browser.contexts[-1].page.loads, [])
         finally:
