@@ -17,7 +17,7 @@ SEMVER = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 FILES = ("__init__.py", "plugin.py", "plugin.json", "history.py",
-         "browser.py", "routes.py", "README.md")
+         "browser.py", "routes.py", "gateway_status.py", "README.md")
 DIRECTORIES = ("templates", "static")
 
 
