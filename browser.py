@@ -60,6 +60,7 @@ class BrowserController:
         self._recovery_attempted = False
         self._user_logout = False
         self._dirty = False
+        self._page_hooked = False
         self._last_save = 0.0
 
     def state(self) -> dict:
@@ -169,15 +170,36 @@ class BrowserController:
                         "Chromium 启动失败。请执行 python -m playwright install chromium"
                     )
         self._context = self.session.new_browser_context(self._browser)
+        # Target=_blank is common on WebVPN portals. Follow the newest
+        # Chromium page instead of silently ignoring a newly opened tab.
+        self._context.on("page", self._attach_page)
         self._page = self._context.new_page()
-        self._page.on("request", self._request_seen)
-        self._page.on("framenavigated", self._navigation_seen)
+        self._attach_page(self._page) if not getattr(self, "_page_hooked", False) else None
         self._positions, self._cursor = [], -1
         self._dirty = False
         self._needs_recovery = False
         self._recovery_attempted = False
         self._user_logout = False
         self._set(running=True, message="浏览器已打开", recovery="idle")
+
+    def _attach_page(self, page) -> None:
+        if self._page is not page:
+            self._page = page
+            self._positions, self._cursor = [], -1
+            self._safe_get_url = GATEWAY_URL
+            self._last_document_method = "GET"
+            self._recovery_attempted = False
+        if getattr(page, "_fc_webvpn_hooked", False):
+            return
+        page.on("request", self._request_seen)
+        page.on("framenavigated", self._navigation_seen)
+        # Avoid relying exclusively on a private page attribute: in mocked
+        # contexts, the page event may not be emitted for the first tab.
+        try:
+            page._fc_webvpn_hooked = True
+        except Exception:
+            pass
+        self._page_hooked = True
 
     def _request_seen(self, request) -> None:
         try:
@@ -287,7 +309,9 @@ class BrowserController:
             self._recovery_attempted = True
             self._recover_if_expired()
         if time.monotonic() - self._last_save >= 12:
-            self._save()
+            if not self._save():
+                self._shutdown(save=False)
+                self._set(message="WebVPN 会话或账号已切换，已关闭旧窗口以保护新的登录状态", recovery="failed")
 
     def _recover_if_expired(self) -> None:
         # A CAS redirect might be a target application's separate CAS login.
@@ -305,6 +329,9 @@ class BrowserController:
         # Discard stale context without committing old credentials.
         self._close_context(save=False)
         self._build_context()
+        # One verified recovery attempt per auth redirect; another immediate
+        # CAS redirect must not start an infinite authenticate/reload cycle.
+        self._recovery_attempted = True
         if target:
             try:
                 self._page.goto(target, wait_until="domcontentloaded", timeout=25000)
@@ -314,22 +341,25 @@ class BrowserController:
         else:
             self._set(recovery="idle", message="WebVPN 已恢复；表单提交不会自动重放，请手动继续")
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
         if self._context is None:
-            return
+            return True
         self._last_save = time.monotonic()
         try:
             self.session.save_browser_state(self._context)
+            return True
         except Exception:
             # Account switched/logout in another plugin: NEVER overwrite its
             # freshly established shared session with this stale browser.
             self._set(message="WebVPN 账号或会话已变化；请重新打开浏览器", recovery="failed")
+            return False
 
     def _close_context(self, *, save: bool) -> None:
         if save:
             self._save()
         context = self._context
         self._page, self._context = None, None
+        self._page_hooked = False
         if context is not None:
             try:
                 context.close()
