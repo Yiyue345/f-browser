@@ -53,7 +53,7 @@ def build_plugin() -> PluginSpec:
                 items=(
                     NavigationItem(
                         key="webvpn_browser", label="内网浏览器",
-                        href="/f-browser", icon="globe",
+                        href="/f-browser", icon="server",
                         active_keys=("webvpn_browser",),
                     ),
                 ),
