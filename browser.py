@@ -42,8 +42,9 @@ class BrowserController:
         self._requests: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._command_inflight = False
         self._state = {
-            "running": False, "url": "", "title": "", "can_back": False,
+            "running": False, "busy": False, "url": "", "title": "", "can_back": False,
             "can_forward": False, "message": "浏览器尚未启动",
             "recovery": "idle",
         }
@@ -58,6 +59,7 @@ class BrowserController:
         self._safe_get_url = GATEWAY_URL
         self._needs_recovery = False
         self._recovery_attempted = False
+        self._allow_auto_recovery = False
         self._user_logout = False
         self._dirty = False
         self._observed_pages: set = set()
@@ -75,25 +77,40 @@ class BrowserController:
         if command not in {"open", "navigate", "back", "forward", "reload", "close", "reset"}:
             raise BrowserError("无效的浏览器命令")
         with self._lock:
-            if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(
-                    target=self._run, daemon=True, name="f-browser-chromium"
-                )
-                self._thread.start()
+            if self._command_inflight:
+                raise BrowserError("已有浏览器操作正在执行，请等待当前任务结束，不要重复点击")
+            self._command_inflight = True
+            self._state["busy"] = True
+            try:
+                if self._thread is None or not self._thread.is_alive():
+                    self._thread = threading.Thread(
+                        target=self._run, daemon=True, name="f-browser-chromium"
+                    )
+                    self._thread.start()
+            except Exception:
+                self._command_inflight = False
+                self._state["busy"] = False
+                raise
         future: Future = Future()
         self._requests.put((command, value, future))
         try:
             return future.result(timeout=timeout)
         except TimeoutError as exc:
-            raise BrowserError("浏览器操作超时，请检查 Chromium 或 WebVPN 连接") from exc
+            # The worker may still be finishing the operation. Do not enqueue
+            # duplicate requests or pretend the underlying command was cancelled.
+            raise BrowserError("当前浏览器操作等待超时，但后台仍可能正在处理；请先查看连接状态再重试") from exc
 
     def stop(self) -> None:
+        # Runtime shutdown must always be allowed to queue a close, even
+        # when an HTTP request is currently awaiting a navigation.
         with self._lock:
             thread = self._thread
         if thread is not None and thread.is_alive():
+            done: Future = Future()
+            self._requests.put(("close", "", done))
             try:
-                self.send("close", timeout=35)
-            except (RuntimeError, TimeoutError):
+                done.result(timeout=40)
+            except TimeoutError:
                 pass
             thread.join(timeout=8)
 
@@ -129,6 +146,10 @@ class BrowserController:
                 except Exception as exc:
                     self._set(message=str(exc))
                     future.set_exception(BrowserError(str(exc)))
+                finally:
+                    with self._lock:
+                        self._command_inflight = False
+                        self._state["busy"] = False
         finally:
             self._shutdown(save=True)
             # Signal queued callers rather than leaving HTTP tasks hanging.
@@ -148,11 +169,20 @@ class BrowserController:
             if url != GATEWAY_URL:
                 self._navigate(url)
             return
-        status = self.session.ensure_authenticated(interactive_allowed=False)
-        if not status.is_authenticated:
-            raise BrowserError(f"WebVPN 尚未就绪：{status.reason}；请使用「重新连接」完成登录")
+        # Do NOT require headless authentication before showing a window.
+        # CAS/OTP/captcha may require human interaction. Open the real
+        # Chromium first so the user can complete the school's own flow.
+        status = self.session.get_status()
+        if status.state == "logged_out":
+            raise BrowserError("WebVPN 已主动退出，请点击「重新连接」后再打开浏览器")
+        self._allow_auto_recovery = bool(status.is_authenticated)
         self._build_context()
         self._goto(url)
+        if not status.is_authenticated:
+            self._set(
+                message="已打开 Chromium：请在新窗口内完成学校 WebVPN/CAS 登录；如曾主动退出，请点击重新连接",
+                recovery="login_required",
+            )
 
     def _build_context(self) -> None:
         if self._browser is None:
