@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from typing import Any
 import time
 from concurrent.futures import Future
 from urllib.parse import urlsplit
@@ -17,6 +18,13 @@ from fuckclassroom.auth.webvpn import (
 
 _GATEWAY_HOST = "v.guet.edu.cn"
 _CAS_HOST = "cas.guet.edu.cn"
+VIEWPORT_WIDTH = 1280
+VIEWPORT_HEIGHT = 760
+_ALLOWED_KEYS = frozenset({
+    "Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowLeft",
+    "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End",
+    "PageUp", "PageDown", "Space",
+})
 
 
 class BrowserError(RuntimeError):
@@ -80,8 +88,8 @@ class BrowserController:
         with self._lock:
             self._state.update(updates)
 
-    def send(self, command: str, value: str = "", *, timeout: int = 50) -> dict:
-        if command not in {"open", "navigate", "back", "forward", "reload", "close", "reset"}:
+    def send(self, command: str, value: Any = "", *, timeout: int = 50) -> Any:
+        if command not in {"open", "navigate", "back", "forward", "reload", "close", "reset", "screenshot", "input"}:
             raise BrowserError("无效的浏览器命令")
         with self._lock:
             if self._command_inflight:
@@ -142,6 +150,14 @@ class BrowserController:
                         self._shutdown(save=False)
                         future.set_result(self.state())
                         continue
+                    if command == "screenshot":
+                        future.set_result(self._screenshot())
+                        continue
+                    if command == "input":
+                        self._input(value)
+                        self._poll_page()
+                        future.set_result(self.state())
+                        continue
                     if command == "open":
                         self._open(value or GATEWAY_URL)
                     elif command == "navigate":
@@ -176,6 +192,7 @@ class BrowserController:
     def _open(self, requested: str) -> None:
         url = validate_webvpn_url(requested)
         if self._page is not None and not self._page.is_closed():
+            # The Chromium is headless. Keep using its current Page.
             self._page.bring_to_front()
             if url != GATEWAY_URL:
                 self._navigate(url)
@@ -191,7 +208,7 @@ class BrowserController:
         self._goto(url)
         if not status.is_authenticated:
             self._set(
-                message="已打开 Chromium：请在新窗口内完成学校 WebVPN/CAS 登录；如曾主动退出，请点击重新连接",
+                message="内嵌浏览器已打开。正在检测统一登录；需要验证码时直接在页面内操作。",
                 recovery="login_required",
             )
 
@@ -203,7 +220,7 @@ class BrowserController:
                 from playwright.sync_api import sync_playwright
                 self._playwright = sync_playwright().start()
                 try:
-                    self._browser = self._playwright.chromium.launch(headless=False)
+                    self._browser = self._playwright.chromium.launch(headless=True)
                 except Exception:
                     self._playwright.stop()
                     self._playwright = None
@@ -216,6 +233,7 @@ class BrowserController:
         self._context.on("page", self._attach_page)
         page = self._context.new_page()
         self._attach_page(page)
+        page.set_viewport_size({"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT})
         self._positions, self._cursor = [], -1
         self._dirty = False
         self._needs_recovery = False
@@ -227,7 +245,7 @@ class BrowserController:
         self._autofill_started = 0.0
         self._autofill_next_try = 0.0
         self._user_logout = False
-        self._set(running=True, message="浏览器已打开", recovery="idle")
+        self._set(running=True, message="内嵌 Chromium 已就绪", recovery="idle")
 
     def _attach_page(self, page) -> None:
         if self._page is not page:
@@ -301,6 +319,49 @@ class BrowserController:
             self._open(safe_target)
             return
         self._goto(safe_target)
+
+    def _screenshot(self) -> bytes:
+        """Capture the remote Chromium pixels; never persist to disk."""
+        if self._page is None or self._page.is_closed():
+            raise BrowserError("浏览器尚未启动")
+        return self._page.screenshot(
+            type="jpeg", quality=76, full_page=False, animations="disabled",
+            timeout=6_000,
+        )
+
+    def _input(self, event: dict[str, Any]) -> None:
+        """Dispatch bounded controls to the owning Playwright thread."""
+        page = self._page
+        if page is None or page.is_closed():
+            raise BrowserError("请先启动内嵌浏览器")
+        if not isinstance(event, dict):
+            raise BrowserError("无效的网页输入")
+        kind = event.get("type")
+        if kind == "click":
+            x, y = event.get("x"), event.get("y")
+            if type(x) not in (int, float) or type(y) not in (int, float):
+                raise BrowserError("点击坐标必须为数字")
+            if not (0 <= x < VIEWPORT_WIDTH and 0 <= y < VIEWPORT_HEIGHT):
+                raise BrowserError("点击位置超出网页视口")
+            page.mouse.click(float(x), float(y), timeout=4_000)
+        elif kind == "scroll":
+            x, y = event.get("x", 0), event.get("y", 0)
+            if type(x) not in (int, float) or type(y) not in (int, float):
+                raise BrowserError("滚动参数无效")
+            page.mouse.wheel(max(-1200, min(1200, float(x))),
+                             max(-1200, min(1200, float(y))))
+        elif kind == "text":
+            value = event.get("text")
+            if not isinstance(value, str) or not (1 <= len(value) <= 200):
+                raise BrowserError("一次文本输入限制为 1～200 个字符")
+            page.keyboard.insert_text(value)
+        elif kind == "key":
+            key = event.get("key")
+            if key not in _ALLOWED_KEYS:
+                raise BrowserError("此按键尚不支持内嵌转发")
+            page.keyboard.press(key, timeout=4_000)
+        else:
+            raise BrowserError("不支持的浏览器交互类型")
 
     def _history_move(self, direction: int) -> None:
         if self._page is None or self._page.is_closed():
@@ -396,13 +457,13 @@ class BrowserController:
             return
         if now - self._autofill_started > 15:
             self._autofill_pending = False
-            self._set(message="统一登录表单尚未就绪，请在 Chromium 中手动登录", recovery="verification_required")
+            self._set(message="统一登录表单尚未就绪，请在内嵌页面中手动登录", recovery="verification_required")
             return
         submit = getattr(self.session, "submit_saved_login", None)
         if not callable(submit):
             self._autofill_pending = False
             self._set(
-                message="当前主仓尚未提供 WebVPN 自动填写接口，请更新主仓，或在 Chromium 中手动登录",
+                message="当前主仓尚未提供 WebVPN 自动填写接口，请更新主仓，或在内嵌页面中手动登录",
                 recovery="login_required",
             )
             return
@@ -410,13 +471,13 @@ class BrowserController:
             outcome = submit(self._page)
         except Exception:
             self._autofill_pending = False
-            self._set(message="自动填写登录信息失败，请在 Chromium 中手动登录", recovery="failed")
+            self._set(message="自动填写登录信息失败，请在内嵌页面中手动登录", recovery="failed")
             return
         if outcome == "submitted":
             self._autofill_pending = False
             self._autofill_submitted = True
             self._set(
-                message="已使用主仓保存的账号提交统一身份认证；如要求短信或验证码请在 Chromium 完成",
+                message="已使用主仓保存的账号提交统一身份认证；如要求短信或验证码请在内嵌页面完成",
                 recovery="login_required",
             )
         elif outcome in {"busy", "not_ready"}:
@@ -424,7 +485,7 @@ class BrowserController:
         else:
             self._autofill_pending = False
             hints = {
-                "verification_required": "学校要求验证码或人工验证，请在 Chromium 中继续",
+                "verification_required": "学校要求验证码或人工验证，请在内嵌页面中继续",
                 "no_credentials": "主仓尚未保存统一账号，请先在账户设置中保存后重新连接",
                 "credentials_unavailable": "主仓已保存的统一账号无法读取，请在账户设置中重新保存",
                 "logged_out": "WebVPN 已主动退出，请先点击重新连接",
