@@ -44,6 +44,7 @@ def build_router(context) -> APIRouter:
     browser = services.get("f_browser")
     store = services.get("f_browser_store")
     session = services.get("webvpn_session")
+    gateway_status = services.get("f_browser_gateway_status")
     tasks = services.get("task_manager")
     templates = services.get("templates")
     auth = services.get("auth_service")
@@ -55,13 +56,13 @@ def build_router(context) -> APIRouter:
             "f_browser/index.html",
             {
                 "session": auth.get_session_status(),
-                "webvpn_status": session.get_status(),
+                "webvpn_status": gateway_status.snapshot(),
             },
         )
 
     @router.get("/api/f-browser/state")
     def state():
-        return {"browser": browser.state(), "webvpn": asdict(session.get_status())}
+        return {"browser": browser.state(), "webvpn": gateway_status.snapshot()}
 
     @router.get("/api/f-browser/frame")
     def frame(request: Request):
