@@ -32,7 +32,7 @@ jobs:
           assert data["rpc_permissions"] == []
           assert SpecifierSet(data["app_requires"]).contains(Version("0.2.0.dev0"), prereleases=True)
       - name: Check Python syntax
-        run: python -m compileall -q __init__.py plugin.py browser.py history.py routes.py scripts tests
+        run: python -m compileall -q __init__.py plugin.py browser.py history.py gateway_status.py routes.py scripts tests
       - name: Check stable plugin boundary
         shell: bash
         run: |
