@@ -343,7 +343,7 @@ class BrowserController:
                 raise BrowserError("点击坐标必须为数字")
             if not (0 <= x < VIEWPORT_WIDTH and 0 <= y < VIEWPORT_HEIGHT):
                 raise BrowserError("点击位置超出网页视口")
-            page.mouse.click(float(x), float(y), timeout=4_000)
+            page.mouse.click(float(x), float(y))
         elif kind == "scroll":
             x, y = event.get("x", 0), event.get("y", 0)
             if type(x) not in (int, float) or type(y) not in (int, float):
@@ -359,7 +359,7 @@ class BrowserController:
             key = event.get("key")
             if key not in _ALLOWED_KEYS:
                 raise BrowserError("此按键尚不支持内嵌转发")
-            page.keyboard.press(key, timeout=4_000)
+            page.keyboard.press(key)
         else:
             raise BrowserError("不支持的浏览器交互类型")
 
