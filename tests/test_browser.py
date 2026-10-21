@@ -482,7 +482,7 @@ class BrowserControllerTests(unittest.TestCase):
             response = worker.send("open")
             self.assertTrue(response["running"])
             self.assertEqual(session.auth_calls, 0)
-            self.assertIn("完成学校", response["message"])
+            self.assertIn("内嵌浏览器已打开", response["message"])
             self.assertEqual(len(session.browser.contexts), 1)
         finally:
             worker.stop()
