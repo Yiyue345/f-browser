@@ -3,7 +3,7 @@
   "name": "校园内网浏览器",
   "version": "0.1.0-beta.1",
   "api_version": 1,
-  "app_requires": ">=0.2,<0.3",
+  "app_requires": ">=0.1,<0.3",
   "description": "使用统一桂电 WebVPN 会话浏览校园内网，支持真实 Chromium 导航、收藏和历史记录。",
   "requires": [],
   "entry": "plugin.py",
