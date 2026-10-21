@@ -122,9 +122,21 @@ class FakePage:
 class FakeContext:
     def __init__(self):
         self.page = FakePage()
+        self.events = {}
+
+    def on(self, event, callback):
+        self.events[event] = callback
 
     def new_page(self):
+        callback = self.events.get("page")
+        if callback:
+            callback(self.page)
         return self.page
+
+    def popup(self):
+        popup = FakePage()
+        self.events["page"](popup)
+        return popup
 
     def close(self):
         self.page.close()
@@ -275,6 +287,34 @@ class BrowserControllerTests(unittest.TestCase):
             worker._idle()
             self.assertEqual(session.auth_calls, 2)
             self.assertEqual(session.browser.contexts[-1].page.loads, [])
+        finally:
+            worker.stop()
+
+    def test_new_window_from_portal_follows_popup_navigation(self):
+        worker, session, store = self.make()
+        try:
+            worker.send("open")
+            context = session.browser.contexts[-1]
+            popup = context.popup()
+            popup.goto("https://v.guet.edu.cn/https/library?token=PRIVATE")
+            worker.send("reload")
+            self.assertEqual(worker.state()["url"],
+                             "https://v.guet.edu.cn/https/library")
+            self.assertNotIn("PRIVATE", str(store.visits))
+        finally:
+            worker.stop()
+
+    def test_stale_session_is_closed_instead_of_writing_old_cookies(self):
+        worker, session, _ = self.make()
+        try:
+            worker.send("open")
+            def revoked(context):
+                raise RuntimeError("WebVPN session generation changed")
+            session.save_browser_state = revoked
+            worker._last_save = 0
+            worker._idle()
+            self.assertFalse(worker.state()["running"])
+            self.assertIn("账号已切换", worker.state()["message"])
         finally:
             worker.stop()
 
