@@ -11,7 +11,7 @@
   <div class="fb-pagehead">
     <div>
       <h1>校园内网浏览器</h1>
-      <p>通过学校 WebVPN 访问校园服务。网页在独立 Chromium 窗口打开，历史与收藏保存在本机。</p>
+      <p>通过学校 WebVPN 访问校园服务。Chromium 在后台渲染，画面与操作直接显示在此页面；历史与收藏保存在本机。</p>
     </div>
     <div class="fb-connection">
       <span class="fb-status-dot" id="fb-connection-dot" aria-hidden="true"></span>
@@ -36,9 +36,10 @@
   </div>
 
   <div class="fb-actions">
-    <button class="btn primary" type="button" data-fb-command="open">打开浏览器窗口</button>
-    <button class="btn" type="button" id="fb-reconnect">重新连接 WebVPN</button>
-    <button class="btn" type="button" data-fb-command="close">关闭浏览器窗口</button>
+    <button class="btn primary" type="button" data-fb-command="open">启动内嵌浏览器</button>
+    <button class="btn" type="button" id="fb-verify-gateway">校验 WebVPN 网关</button>
+    <button class="btn" type="button" id="fb-reconnect">重新登录（重置 WebVPN）</button>
+    <button class="btn" type="button" data-fb-command="close">关闭浏览器</button>
     <a class="btn" href="https://v.guet.edu.cn/" target="_blank" rel="noopener noreferrer">在普通浏览器打开门户</a>
   </div>
 
@@ -51,13 +52,18 @@
         <span class="fb-small" id="fb-browser-running">未启动</span>
       </div>
       <p id="fb-page-title" class="fb-document-title">还没有打开内网页面</p>
-      <p id="fb-page-url" class="fb-page-url">点击“打开浏览器窗口”开始访问。</p>
-      <div class="fb-preview">
-        <div class="fb-window-symbol" aria-hidden="true">▣</div>
-        <p>校园网页在独立 Chromium 窗口中显示</p>
-        <p class="fb-small">支持网页自己的表单、下载、前进后退和复杂脚本。学校网页不需要支持 iframe 嵌入。</p>
+      <p id="fb-page-url" class="fb-page-url">点击“启动内嵌浏览器”开始访问。</p>
+      <div class="fb-viewport" id="fb-viewport" role="application" aria-label="可交互的校园内网页面，点击后输入键盘文字" tabindex="0">
+        <img id="fb-frame-image" alt="Chromium 渲染的校园内网页面" width="1280" height="760" draggable="false" hidden>
+        <div class="fb-viewport-empty" id="fb-viewport-empty">
+          <span class="fb-window-symbol" aria-hidden="true">▣</span>
+          <strong>内嵌 Chromium 尚未启动</strong>
+          <span>启动后可在这里点击网页、输入文字、滚动和完成学校统一认证。</span>
+        </div>
+        <textarea id="fb-keyboard-input" class="fb-keyboard-bridge" aria-label="内嵌浏览器键盘输入" spellcheck="false" autocomplete="off"></textarea>
       </div>
-      <p class="fb-small">需要学校 CAS、短信或图形验证码时，请直接在弹出的 Chromium 登录窗口中完成。首次打开不再等待后台无界面登录。</p>
+      <p class="fb-small">教务系统登录状态与 WebVPN 网关认证是两套不同状态；右上角“尚未验证”不等于账号密码未保存。可点击“校验 WebVPN 网关”进行实际检测。</p>
+      <p class="fb-small">内嵌模式通过 Chromium 截图与输入转发工作；目前支持点击、键盘和滚动，文件上传、网页剪贴板及复杂拖拽暂不支持。</p>
     </section>
 
     <section class="fb-panel">
@@ -79,5 +85,5 @@
     </section>
   </div>
 </section>
-<script defer src="/plugins/webvpn_browser/static/browser.js?v=1"></script>
+<script defer src="/plugins/webvpn_browser/static/browser.js?v=2"></script>
 {% endblock %}
