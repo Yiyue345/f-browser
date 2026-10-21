@@ -59,6 +59,8 @@ class BrowserController:
         self._safe_get_url = GATEWAY_URL
         self._needs_recovery = False
         self._recovery_attempted = False
+        self._manual_login_seen = False
+        self._manual_verify_pending = False
         self._allow_auto_recovery = False
         self._user_logout = False
         self._dirty = False
@@ -214,6 +216,8 @@ class BrowserController:
         self._dirty = False
         self._needs_recovery = False
         self._recovery_attempted = False
+        self._manual_login_seen = False
+        self._manual_verify_pending = False
         self._user_logout = False
         self._set(running=True, message="浏览器已打开", recovery="idle")
 
@@ -248,11 +252,18 @@ class BrowserController:
             return
         url = frame.url
         if _gateway_login_url(url):
+            self._manual_login_seen = True
             self._needs_recovery = True
         try:
             safe = safe_history_url(url)
         except Exception:
             return
+        if self._manual_login_seen and not self._allow_auto_recovery:
+            # After manual CAS login, verify in a separate thread so the
+            # broker learns the newly saved cookies and later expiry can
+            # recover automatically. Never probe on the Playwright thread.
+            self._manual_login_seen = False
+            self._manual_verify_pending = True
         if self._last_document_method == "GET":
             self._safe_get_url = safe
         if self._cursor >= 0 and safe == self._positions[self._cursor]:
@@ -347,6 +358,10 @@ class BrowserController:
                     message="请在 Chromium 窗口中完成学校统一身份认证，页面不会被后台登录任务阻塞",
                 )
         self._finish_recovery()
+        if self._manual_verify_pending and self._recovery_future is None:
+            self._manual_verify_pending = False
+            if self._save():
+                self._verify_manual_login()
         if time.monotonic() - self._last_save >= 12:
             if not self._save():
                 self._shutdown(save=False)
@@ -379,6 +394,21 @@ class BrowserController:
             target=work, daemon=True, name="f-browser-webvpn-recovery"
         ).start()
 
+    def _verify_manual_login(self) -> None:
+        self._set(recovery="checking", message="已返回 WebVPN 页面，正在验证浏览器登录状态")
+        result: Future = Future()
+        self._recovery_future = result
+
+        def work() -> None:
+            try:
+                result.set_result((False, self.session.verify()))
+            except Exception:
+                result.set_exception(BrowserError("无法确认浏览器登录状态"))
+
+        threading.Thread(
+            target=work, daemon=True, name="f-browser-manual-login-check"
+        ).start()
+
     def _finish_recovery(self) -> None:
         future = self._recovery_future
         if future is None or not future.done():
@@ -390,9 +420,11 @@ class BrowserController:
             self._set(recovery="failed", message="WebVPN 恢复失败，请手动重新连接")
             return
         if not expired:
+            if result.is_authenticated:
+                self._allow_auto_recovery = True
             self._set(
                 recovery="idle" if result.is_authenticated else result.state,
-                message="网关登录仍有效" if result.is_authenticated else result.reason,
+                message="WebVPN 网关已认证，可以继续浏览" if result.is_authenticated else result.reason,
             )
             return
         if not result.is_authenticated:
@@ -457,7 +489,12 @@ class BrowserController:
                 pass
         self._playwright = None
         self._positions, self._cursor = [], -1
+        self._needs_recovery = False
+        self._recovery_attempted = False
+        self._manual_login_seen = False
+        self._manual_verify_pending = False
+        self._recovery_future = None
         self._set(
             running=False, url="", title="", can_back=False, can_forward=False,
-            message="浏览器已关闭",
+            message="浏览器已关闭", recovery="idle",
         )
