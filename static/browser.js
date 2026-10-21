@@ -175,7 +175,7 @@
   });
 
   el('fb-reconnect').addEventListener('click', () => {
-    if (window.confirm('重新连接会启动学校统一认证，并关闭旧浏览器会话。继续吗？')) {
+    if (window.confirm('重新连接会关闭旧 Chromium 窗口，并在新的可见窗口中打开学校统一认证。继续吗？')) {
       task('/api/f-browser/reconnect');
     }
   });
