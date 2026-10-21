@@ -168,6 +168,8 @@ class FakeSession:
         self.verify_state = "authenticated"
         self.browser = FakeBrowser()
         self.auth_calls = 0
+        self.autofill_calls = 0
+        self.autofill_result = "submitted"
         self.verify_calls = 0
         self.saves = 0
         self.logouts = 0
@@ -184,6 +186,10 @@ class FakeSession:
             is_authenticated=self.state == "authenticated",
             state=self.state, reason=self.state,
         )
+
+    def submit_saved_login(self, page):
+        self.autofill_calls += 1
+        return self.autofill_result
 
     def verify(self):
         self.verify_calls += 1
@@ -255,6 +261,64 @@ class BrowserControllerTests(unittest.TestCase):
                 worker.send("navigate", "http://127.0.0.1:8888/private")
             with self.assertRaises(browser.BrowserError):
                 worker.send("navigate", "https://not-guet.example/")
+        finally:
+            worker.stop()
+
+    def test_saved_credentials_are_auto_submitted_once_in_visible_cas_page(self):
+        worker, session, _ = self.make()
+        session.state = "login_required"
+        try:
+            response = worker.send("open")
+            self.assertTrue(response["running"])
+            self.assertEqual(session.auth_calls, 0)
+            page = session.browser.contexts[-1].page
+            page.goto("https://cas.guet.edu.cn/authserver/login")
+            self.assertTrue(self.wait_until(lambda: session.autofill_calls == 1))
+            # A persistent CAS login page must NOT receive repeated credential submissions.
+            time.sleep(.15)
+            self.assertEqual(session.autofill_calls, 1)
+            self.assertEqual(session.auth_calls, 0)
+            self.assertIn("已使用主仓保存的账号", worker.state()["message"])
+        finally:
+            worker.stop()
+
+    def test_missing_saved_credentials_is_actionable(self):
+        worker, session, _ = self.make()
+        session.state = "login_required"
+        session.autofill_result = "no_credentials"
+        try:
+            worker.send("open")
+            session.browser.contexts[-1].page.goto("https://cas.guet.edu.cn/authserver/login")
+            self.assertTrue(self.wait_until(lambda: session.autofill_calls >= 1))
+            self.assertIn("账户设置", worker.state()["message"])
+            self.assertEqual(session.autofill_calls, 1)
+        finally:
+            worker.stop()
+
+    def test_old_main_without_autofill_contract_does_not_read_credentials(self):
+        worker, session, _ = self.make()
+        session.state = "login_required"
+        session.submit_saved_login = None
+        try:
+            worker.send("open")
+            session.browser.contexts[-1].page.goto("https://cas.guet.edu.cn/authserver/login")
+            self.assertTrue(self.wait_until(lambda: "更新主仓" in worker.state()["message"]))
+            self.assertEqual(session.auth_calls, 0)
+        finally:
+            worker.stop()
+
+    def test_unready_form_is_retried_without_blocking_browser_thread(self):
+        worker, session, _ = self.make()
+        session.state = "login_required"
+        session.autofill_result = "not_ready"
+        try:
+            worker.send("open")
+            session.browser.contexts[-1].page.goto("https://cas.guet.edu.cn/authserver/login")
+            self.assertTrue(self.wait_until(lambda: session.autofill_calls >= 1))
+            started = time.monotonic()
+            closed = worker.send("close")
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertFalse(closed["running"])
         finally:
             worker.stop()
 
