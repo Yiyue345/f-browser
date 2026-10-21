@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,10 +39,18 @@ class HistoryStore:
                 );
             """)
 
+    @contextmanager
     def _connect(self):
         db = sqlite3.connect(str(self.path), timeout=8)
         db.row_factory = sqlite3.Row
-        return db
+        try:
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def record(self, url: str, title: str) -> None:
         safe = safe_history_url(url)
