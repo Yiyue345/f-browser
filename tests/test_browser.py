@@ -67,6 +67,30 @@ class FakeRequest:
         return True
 
 
+class FakeMouse:
+    def __init__(self):
+        self.clicks = []
+        self.scrolls = []
+
+    def click(self, x, y):
+        self.clicks.append((x, y))
+
+    def wheel(self, x, y):
+        self.scrolls.append((x, y))
+
+
+class FakeKeyboard:
+    def __init__(self):
+        self.texts = []
+        self.keys = []
+
+    def insert_text(self, text):
+        self.texts.append(text)
+
+    def press(self, key):
+        self.keys.append(key)
+
+
 class FakePage:
     def __init__(self):
         self.events = {}
@@ -75,6 +99,15 @@ class FakePage:
         self._closed = False
         self._trail, self._cursor = [], -1
         self.loads = []
+        self.mouse = FakeMouse()
+        self.keyboard = FakeKeyboard()
+        self.viewport_size = None
+
+    def set_viewport_size(self, size):
+        self.viewport_size = size
+
+    def screenshot(self, **kwargs):
+        return b"FAKE_JPEG_FRAME"
 
     def on(self, event, callback):
         self.events[event] = callback
@@ -233,6 +266,41 @@ class BrowserControllerTests(unittest.TestCase):
             session, store, launcher=lambda: (FakePlaywright(), session.browser),
         )
         return worker, session, store
+
+    def test_embedded_screenshot_and_click_keyboard_scroll(self):
+        worker, session, _ = self.make()
+        try:
+            worker.send("open")
+            page = session.browser.contexts[-1].page
+            self.assertEqual(page.viewport_size, {"width": 1280, "height": 760})
+            self.assertEqual(worker.send("screenshot"), b"FAKE_JPEG_FRAME")
+            worker.send("input", {"type": "click", "x": 100, "y": 240})
+            worker.send("input", {"type": "scroll", "x": 0, "y": 480})
+            worker.send("input", {"type": "text", "text": "校园服务"})
+            worker.send("input", {"type": "key", "key": "Enter"})
+            self.assertEqual(page.mouse.clicks, [(100.0, 240.0)])
+            self.assertEqual(page.mouse.scrolls, [(0, 480)])
+            self.assertEqual(page.keyboard.texts, ["校园服务"])
+            self.assertEqual(page.keyboard.keys, ["Enter"])
+        finally:
+            worker.stop()
+
+    def test_embedded_input_refuses_unsafe_or_invalid_events(self):
+        worker, session, _ = self.make()
+        try:
+            worker.send("open")
+            for event in (
+                {"type": "click", "x": -1, "y": 5},
+                {"type": "click", "x": 1280, "y": 1},
+                {"type": "text", "text": "x" * 201},
+                {"type": "key", "key": "Control+L"},
+                {"type": "script", "text": "alert(1)"},
+            ):
+                with self.assertRaises(browser.BrowserError):
+                    worker.send("input", event)
+            self.assertEqual(session.browser.contexts[-1].page.mouse.clicks, [])
+        finally:
+            worker.stop()
 
     def test_real_navigation_commands_share_one_context(self):
         worker, session, store = self.make()
