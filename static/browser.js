@@ -12,6 +12,14 @@
   let busy = false;
   let alive = true;
   let refreshTimer = null;
+  let frameTimer = null;
+  let framePending = false;
+  let previousFrame = null;
+  let inputChain = Promise.resolve();
+  const viewport = el('fb-viewport');
+  const frameImage = el('fb-frame-image');
+  const frameEmpty = el('fb-viewport-empty');
+  const keyboard = el('fb-keyboard-input');
 
   function notice(message, isError = false) {
     if (!alive) return;
@@ -42,7 +50,7 @@
 
   function toggleBusy(working) {
     busy = working;
-    app.querySelectorAll('[data-fb-command], [data-fb-action], #fb-reconnect').forEach((button) => {
+    app.querySelectorAll('[data-fb-command], [data-fb-action], #fb-reconnect, #fb-verify-gateway').forEach((button) => {
       button.disabled = working;
     });
   }
@@ -61,6 +69,7 @@
         if (state.status === 'succeeded') {
           notice('操作完成');
           await Promise.all([refreshState(), refreshEntries()]);
+          await refreshFrame();
           return;
         }
         if (state.status === 'failed' || state.status === 'cancelled') {
@@ -87,10 +96,11 @@
       const connected = vpn.state === 'authenticated';
       el('fb-connection-dot').classList.toggle('is-connected', connected);
       el('fb-connection-text').textContent = vpn.reason || 'WebVPN 状态未知';
-      el('fb-browser-running').textContent = current.running ? '浏览器已运行' : '浏览器未启动';
+      el('fb-browser-running').textContent = current.running ? '内嵌浏览器已运行' : '内嵌浏览器未启动';
       el('fb-page-title').textContent = current.title || (current.running ? '正在加载' : '尚未打开网页');
       el('fb-page-url').textContent = current.url || current.message || '';
       if (current.url && document.activeElement !== address) address.value = current.url;
+      frameEmpty.hidden = Boolean(current.running && !frameImage.hidden);
       if (!busy) {
         const back = app.querySelector('[data-fb-command="back"]');
         const forward = app.querySelector('[data-fb-command="forward"]');
@@ -175,7 +185,7 @@
   });
 
   el('fb-reconnect').addEventListener('click', () => {
-    if (window.confirm('重新连接会关闭旧 Chromium 窗口，并在新的可见窗口中打开学校统一认证。继续吗？')) {
+    if (window.confirm('此操作会清除旧 WebVPN 会话并在内嵌页面重新认证。教务登录并不保证 WebVPN 已认证，建议优先使用「校验 WebVPN 网关」。确定重置吗？')) {
       task('/api/f-browser/reconnect');
     }
   });
@@ -214,12 +224,102 @@
   });
   search.addEventListener('input', renderEntries);
 
+  el('fb-verify-gateway').addEventListener('click', () => task('/api/f-browser/verify'));
+
+  async function refreshFrame() {
+    if (!alive || framePending || busy || !browserState.running) return;
+    framePending = true;
+    try {
+      const response = await fetch('/api/f-browser/frame', {
+        cache: 'no-store', credentials: 'same-origin',
+        headers: {'X-F-Browser-Action': '1', Accept: 'image/jpeg'},
+      });
+      if (!response.ok) return;
+      const blob = await response.blob();
+      if (!alive) return;
+      const url = URL.createObjectURL(blob);
+      const old = previousFrame;
+      frameImage.onload = () => {
+        if (old) URL.revokeObjectURL(old);
+        frameEmpty.hidden = true;
+      };
+      frameImage.src = url;
+      frameImage.hidden = false;
+      previousFrame = url;
+    } catch (_) {
+      // A frame can be unavailable while login/navigation is in progress.
+    } finally {
+      framePending = false;
+    }
+  }
+
+  function queueInput(payload) {
+    if (!alive || busy || !browserState.running) return;
+    inputChain = inputChain.then(async () => {
+      if (!alive || busy) return;
+      await json('/api/f-browser/input', 'POST', payload);
+    }).catch((error) => {
+      notice('网页输入未完成：' + (error.message || '稍后重试'), true);
+    });
+  }
+
+  viewport.addEventListener('pointerdown', (event) => {
+    if (!browserState.running || frameImage.hidden) return;
+    if (event.button !== 0) return;
+    const rect = frameImage.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = (event.clientX - rect.left) / rect.width * 1280;
+    const y = (event.clientY - rect.top) / rect.height * 760;
+    if (x < 0 || y < 0 || x >= 1280 || y >= 760) return;
+    event.preventDefault();
+    queueInput({type: 'click', x, y});
+    keyboard.focus({preventScroll: true});
+  });
+
+  viewport.addEventListener('wheel', (event) => {
+    if (!browserState.running) return;
+    event.preventDefault();
+    queueInput({
+      type: 'scroll',
+      x: Math.max(-1200, Math.min(1200, event.deltaX)),
+      y: Math.max(-1200, Math.min(1200, event.deltaY)),
+    });
+  }, {passive: false});
+
+  keyboard.addEventListener('input', () => {
+    if (!keyboard.value) return;
+    const value = keyboard.value;
+    keyboard.value = '';
+    // Group text in a single Chromium keyboard.insert_text call, including IME.
+    for (let offset = 0; offset < value.length; offset += 200) {
+      queueInput({type: 'text', text: value.slice(offset, offset + 200)});
+    }
+  });
+
+  keyboard.addEventListener('keydown', (event) => {
+    const keyMap = {' ': 'Space'};
+    const key = keyMap[event.key] || event.key;
+    const keys = new Set(['Enter', 'Tab', 'Escape', 'Backspace', 'Delete',
+      'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+      'Home', 'End', 'PageUp', 'PageDown', 'Space']);
+    if (keys.has(key)) {
+      event.preventDefault();
+      queueInput({type: 'key', key});
+    }
+  });
+  viewport.addEventListener('keydown', (event) => {
+    if (event.target === viewport && browserState.running) keyboard.focus({preventScroll: true});
+  });
+
   const cleanup = () => {
     alive = false;
     clearInterval(refreshTimer);
+    clearInterval(frameTimer);
+    if (previousFrame) URL.revokeObjectURL(previousFrame);
   };
   document.addEventListener('academic:page-before-swap', cleanup, {once: true});
   refreshState();
   refreshEntries();
   refreshTimer = setInterval(() => { if (!busy) refreshState(); }, 2500);
+  frameTimer = setInterval(refreshFrame, 1100);
 })();
