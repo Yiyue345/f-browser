@@ -485,9 +485,12 @@ class BrowserController:
         # academic WebVPN session after this Chromium context was opened.
         # Observe that result without navigating or invoking a new login.
         if not self._allow_auto_recovery and self.session.get_status().is_authenticated:
-            self._allow_auto_recovery = True
-            if self._state.get("recovery") in {"login_required", "checking"}:
-                self._set(recovery="idle", message="已确认现有 WebVPN 网关会话有效")
+            # The broker may have verified a *new* session created by the
+            # academic module after this Chromium context was constructed.
+            # This context is a snapshot: updating the status label alone
+            # cannot import those cookies. Discard without writing stale
+            # cookies, reconstruct from the broker and replay only safe GET.
+            self._refresh_shared_session()
         if self._autofill_pending:
             self._maybe_submit_saved_login()
         if self._user_logout:
@@ -513,6 +516,39 @@ class BrowserController:
             if not self._save():
                 self._shutdown(save=False)
                 self._set(message="WebVPN 会话或账号已切换，已关闭旧窗口以保护新的登录状态", recovery="failed")
+
+    def _refresh_shared_session(self) -> None:
+        """Reopen an already-running page with newly verified shared state.
+
+        Never commit stale CAS cookies or automatically resubmit forms. This
+        is only called on the Playwright owning thread after broker verification.
+        """
+        if self._context is None or self._page is None:
+            self._allow_auto_recovery = True
+            return
+        target = self._safe_get_url if self._last_document_method == "GET" else GATEWAY_URL
+        try:
+            target = validate_webvpn_url(target)
+            # Do not replay a CAS/login or logout URL even if originally a GET.
+            if _gateway_login_url(target):
+                target = GATEWAY_URL
+            else:
+                safe_history_url(target)
+        except Exception:
+            target = GATEWAY_URL
+        # The browser context has its own generation and storage_state
+        # snapshot. Close it without saving, then reload the broker's state.
+        self._close_context(save=False)
+        try:
+            self._build_context()
+            self._allow_auto_recovery = True
+            self._goto(target)
+            self._set(
+                recovery="idle",
+                message="已载入主程序更新后的 WebVPN 会话",
+            )
+        except Exception:
+            self._set(recovery="failed", message="载入共享 WebVPN 会话失败，请重新打开内嵌浏览器")
 
     def _maybe_submit_saved_login(self) -> None:
         """Use the host's saved credentials in the *visible* CAS window.
