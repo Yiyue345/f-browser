@@ -202,6 +202,10 @@ class BrowserController:
         status = self.session.get_status()
         if status.state == "logged_out":
             raise BrowserError("WebVPN 已主动退出，请先通过主程序重新登录")
+        # The user may close the last Chromium tab without closing its
+        # BrowserContext. Reuse the browser process, not the dead context.
+        if self._context is not None:
+            self._close_context(save=True)
         self._build_context()
         # Record which shared session snapshot this Context was made from.
         self._context_stamp = self._stamp(status)
