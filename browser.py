@@ -18,6 +18,13 @@ from fuckclassroom.auth.webvpn import (
 
 _GATEWAY_HOST = "v.guet.edu.cn"
 _CAS_HOST = "cas.guet.edu.cn"
+# Confirmed GUET CAS endpoint rewritten by the school's WebVPN gateway.
+# Never treat arbitrary /https/<opaque>/authserver/login paths as credential targets.
+_CAS_GATEWAY_PATH = (
+    "/https/"
+    "77726476706e69737468656265737421f3f652d220256d44300d8db9d6562d"
+    "/authserver/login"
+)
 VIEWPORT_WIDTH = 1280
 VIEWPORT_HEIGHT = 760
 _ALLOWED_KEYS = frozenset({
@@ -34,11 +41,14 @@ class BrowserError(RuntimeError):
 def _gateway_login_url(url: str) -> bool:
     """A gateway/CAS redirect is a *signal to verify*, not proof of expiry."""
     parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
     if parsed.hostname == _CAS_HOST:
         return True
     return parsed.hostname == _GATEWAY_HOST and (
         parsed.path.lower().startswith("/login")
         or parsed.path.lower().startswith("/wengine-auth/login")
+        or parsed.path.lower().rstrip("/") == _CAS_GATEWAY_PATH
     )
 
 
@@ -51,6 +61,10 @@ class BrowserController:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._command_inflight = False
+        self._frame_future: Future | None = None
+        self._pending_inputs = 0
+        self._frame_cache: bytes | None = None
+        self._frame_cache_at = 0.0
         self._state = {
             "running": False, "busy": False, "url": "", "title": "", "can_back": False,
             "can_forward": False, "message": "浏览器尚未启动",
@@ -91,15 +105,37 @@ class BrowserController:
     def send(self, command: str, value: Any = "", *, timeout: int = 50) -> Any:
         if command not in {"open", "navigate", "back", "forward", "reload", "close", "reset", "screenshot", "input"}:
             raise BrowserError("无效的浏览器命令")
+        is_navigation = command in {"open", "navigate", "back", "forward", "reload", "close", "reset"}
         with self._lock:
-            if self._command_inflight:
+            if is_navigation and self._command_inflight:
                 raise BrowserError("已有浏览器操作正在执行，请等待当前任务结束，不要重复点击")
             if self._state.get("recovery") in {"checking", "recovering"} and command in {
                 "open", "navigate", "back", "forward", "reload"
             }:
                 raise BrowserError("WebVPN 正在后台验证或恢复登录，请等待完成后再导航")
-            self._command_inflight = True
-            self._state["busy"] = True
+            if command == "screenshot":
+                # Only one screenshot may enter the Playwright queue. Concurrent
+                # polling clients await the same Future instead of starving input.
+                if (self._frame_cache is not None and self._frame_future is None
+                        and time.monotonic() - self._frame_cache_at < 0.35):
+                    return self._frame_cache
+                if self._frame_future is not None:
+                    future = self._frame_future
+                    enqueue = False
+                else:
+                    future = Future()
+                    self._frame_future = future
+                    enqueue = True
+            else:
+                enqueue = True
+                future = Future()
+            if command == "input":
+                if self._pending_inputs >= 32:
+                    raise BrowserError("浏览器输入队列已满，请稍后操作")
+                self._pending_inputs += 1
+            if is_navigation:
+                self._command_inflight = True
+                self._state["busy"] = True
             try:
                 if self._thread is None or not self._thread.is_alive():
                     self._thread = threading.Thread(
@@ -107,17 +143,20 @@ class BrowserController:
                     )
                     self._thread.start()
             except Exception:
-                self._command_inflight = False
-                self._state["busy"] = False
+                if command == "input":
+                    self._pending_inputs -= 1
+                if command == "screenshot" and enqueue:
+                    self._frame_future = None
+                if is_navigation:
+                    self._command_inflight = False
+                    self._state["busy"] = False
                 raise
-        future: Future = Future()
-        self._requests.put((command, value, future))
+        if enqueue:
+            self._requests.put((command, value, future))
         try:
             return future.result(timeout=timeout)
         except TimeoutError as exc:
-            # The worker may still be finishing the operation. Do not enqueue
-            # duplicate requests or pretend the underlying command was cancelled.
-            raise BrowserError("当前浏览器操作等待超时，但后台仍可能正在处理；请先查看连接状态再重试") from exc
+            raise BrowserError("浏览器操作等待超时；任务可能仍在执行，请先检查浏览器状态") from exc
 
     def stop(self) -> None:
         # Runtime shutdown must always be allowed to queue a close, even
@@ -134,59 +173,88 @@ class BrowserController:
             thread.join(timeout=8)
 
     def _run(self) -> None:
+        next_maintenance = time.monotonic() + 0.15
         try:
             while True:
                 try:
-                    command, value, future = self._requests.get(timeout=0.35)
+                    command, value, future = self._requests.get(timeout=0.15)
                 except queue.Empty:
-                    self._idle()
-                    continue
-                try:
-                    if command == "close":
-                        self._shutdown(save=True)
-                        future.set_result(self.state())
-                        break
-                    if command == "reset":
-                        self._shutdown(save=False)
-                        future.set_result(self.state())
-                        continue
-                    if command == "screenshot":
-                        future.set_result(self._screenshot())
-                        continue
-                    if command == "input":
-                        self._input(value)
+                    command = None
+                if command is not None:
+                    try:
+                        if command == "close":
+                            self._shutdown(save=True)
+                            future.set_result(self.state())
+                            break
+                        if command == "reset":
+                            self._shutdown(save=False)
+                            future.set_result(self.state())
+                            continue
+                        if command == "screenshot":
+                            frame = self._screenshot()
+                            with self._lock:
+                                self._frame_cache = frame
+                                self._frame_cache_at = time.monotonic()
+                            future.set_result(frame)
+                            continue
+                        if command == "input":
+                            self._input(value)
+                            self._poll_page()
+                            with self._lock:
+                                self._frame_cache = None
+                            future.set_result(self.state())
+                            continue
+                        if command == "open":
+                            self._open(value or GATEWAY_URL)
+                        elif command == "navigate":
+                            self._navigate(value)
+                        elif command == "back":
+                            self._history_move(-1)
+                        elif command == "forward":
+                            self._history_move(1)
+                        elif command == "reload":
+                            self._reload()
                         self._poll_page()
+                        with self._lock:
+                            self._frame_cache = None
                         future.set_result(self.state())
-                        continue
-                    if command == "open":
-                        self._open(value or GATEWAY_URL)
-                    elif command == "navigate":
-                        self._navigate(value)
-                    elif command == "back":
-                        self._history_move(-1)
-                    elif command == "forward":
-                        self._history_move(1)
-                    elif command == "reload":
-                        self._reload()
-                    self._poll_page()
-                    future.set_result(self.state())
-                except Exception as exc:
-                    self._set(message=str(exc))
-                    future.set_exception(BrowserError(str(exc)))
-                finally:
-                    with self._lock:
-                        self._command_inflight = False
-                        self._state["busy"] = False
+                    except Exception as exc:
+                        if command not in {"screenshot", "input"}:
+                            self._set(message=str(exc))
+                        future.set_exception(BrowserError(str(exc)))
+                    finally:
+                        with self._lock:
+                            if command == "screenshot" and self._frame_future is future:
+                                self._frame_future = None
+                            if command == "input":
+                                self._pending_inputs -= 1
+                            if command in {"open", "navigate", "back", "forward", "reload", "close", "reset"}:
+                                self._command_inflight = False
+                                self._state["busy"] = False
+                # Maintenance must run regardless of screenshot traffic.
+                # Keep Playwright calls exclusively on this worker thread.
+                if self._page is not None and time.monotonic() >= next_maintenance:
+                    next_maintenance = time.monotonic() + 0.2
+                    try:
+                        self._idle()
+                    except Exception:
+                        self._set(message="内嵌浏览器状态同步异常，请查看任务日志", recovery="failed")
         finally:
-            self._shutdown(save=True)
-            # Signal queued callers rather than leaving HTTP tasks hanging.
+            self._shutdown(save=False)
             while True:
                 try:
                     _, _, future = self._requests.get_nowait()
                 except queue.Empty:
                     break
-                future.set_exception(BrowserError("浏览器已停止"))
+                if not future.done():
+                    future.set_exception(BrowserError("浏览器已停止"))
             with self._lock:
+                if self._frame_future is not None and not self._frame_future.done():
+                    self._frame_future.set_exception(BrowserError("浏览器已停止"))
+                self._frame_future = None
+                self._pending_inputs = 0
+                self._command_inflight = False
+                self._state["busy"] = False
                 self._thread = None
 
     def _open(self, requested: str) -> None:
