@@ -181,6 +181,7 @@ class SharedSession:
         self.new_context_calls = 0
         self.saves = 0
         self.saved_contexts = []
+        self.fail_next_save = False
         self.clears = 0
 
     def get_status(self):
@@ -196,6 +197,9 @@ class SharedSession:
         return context
 
     def save_browser_state(self, context):
+        if self.fail_next_save:
+            self.fail_next_save = False
+            raise RuntimeError("session generation changed")
         self.saves += 1
         self.saved_contexts.append(context)
 
@@ -409,6 +413,20 @@ class NativeBrowserTests(unittest.TestCase):
             self.assertTrue(self.until(lambda: context.closed))
             # Context shutdown on broker revision does not write old cookies.
             self.assertEqual(session.saved_contexts.count(context), 1)
+        finally:
+            controller.stop()
+
+    def test_rejected_stale_cookie_save_reloads_context(self):
+        controller, session, _ = self.make()
+        try:
+            controller.send("open")
+            first = session.chromium.contexts[-1]
+            session.fail_next_save = True
+            controller._last_save = 0
+            self.assertTrue(self.until(lambda: session.new_context_calls == 2))
+            self.assertTrue(first.closed)
+            self.assertTrue(controller.state()["running"])
+            self.assertEqual(session.clears, 0)
         finally:
             controller.stop()
 
