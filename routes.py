@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Literal
-
+ 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from fuckclassroom.auth.webvpn import safe_history_url, validate_webvpn_url
@@ -17,14 +16,6 @@ class NavigatePayload(BaseModel):
 
 class BookmarkPayload(NavigatePayload):
     title: str = Field(default="校园内网", max_length=180)
-
-
-class BrowserInputPayload(BaseModel):
-    type: Literal["click", "scroll", "text", "key"]
-    x: float | None = None
-    y: float | None = None
-    text: str | None = Field(default=None, max_length=200)
-    key: str | None = Field(default=None, max_length=32)
 
 
 def _assert_same_origin_action(request: Request) -> None:
@@ -64,31 +55,6 @@ def build_router(context) -> APIRouter:
     def state():
         return {"browser": browser.state(), "webvpn": gateway_status.snapshot()}
 
-    @router.get("/api/f-browser/frame")
-    def frame(request: Request):
-        # Unlike a plain <img src>, fetch() must supply the same-origin custom
-        # header. Authenticated page pixels must not be cross-origin embeddable.
-        _assert_same_origin_action(request)
-        if not browser.state().get("running"):
-            raise HTTPException(status_code=409, detail="内嵌浏览器尚未启动")
-        try:
-            image = browser.send("screenshot", timeout=9)
-        except Exception as exc:
-            raise HTTPException(status_code=409, detail="截图暂时不可用，稍后重试") from exc
-        return Response(
-            content=image, media_type="image/jpeg",
-            headers={"Cache-Control": "no-store, private", "X-Content-Type-Options": "nosniff",
-                     "Content-Security-Policy": "default-src 'none'", "X-Frame-Options": "DENY"},
-        )
-
-    @router.post("/api/f-browser/input")
-    def browser_input(request: Request, payload: BrowserInputPayload):
-        _assert_same_origin_action(request)
-        try:
-            return browser.send("input", payload.model_dump(exclude_none=True), timeout=9)
-        except Exception as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
     @router.post("/api/f-browser/verify")
     def verify_gateway(request: Request):
         _assert_same_origin_action(request)
@@ -102,11 +68,11 @@ def build_router(context) -> APIRouter:
     @router.post("/api/f-browser/control/{command}")
     def control(request: Request, command: str):
         _assert_same_origin_action(request)
-        if command not in {"open", "back", "forward", "reload", "close"}:
+        if command not in {"open", "back", "forward", "reload", "close", "sync"}:
             raise HTTPException(status_code=404, detail="不支持的浏览器操作")
 
         def worker(progress):
-            progress(10, "正在操作内嵌 Chromium 浏览器")
+            progress(10, "正在操作独立 Chromium 浏览器")
             browser.send(command, timeout=150 if command == "open" else 50)
             progress(100, "操作完成")
             return "/f-browser"
@@ -123,7 +89,7 @@ def build_router(context) -> APIRouter:
             raise HTTPException(status_code=400, detail="只允许 HTTPS WebVPN 网关地址；请先在网关门户中获取入口")
 
         def worker(progress):
-            progress(5, "正在安全访问 WebVPN 页面")
+            progress(5, "正在向 Chromium 浏览器发送导航请求")
             browser.send("navigate", target, timeout=150)
             progress(100, "网页已打开")
             return "/f-browser"
@@ -132,21 +98,21 @@ def build_router(context) -> APIRouter:
 
     @router.post("/api/f-browser/reconnect")
     def reconnect(request: Request):
+        """Explicit broker-controlled WebVPN login, never plugin autofill."""
         _assert_same_origin_action(request)
 
         def worker(progress):
-            # Reconnect is an explicit user action, not another 90-second
-            # headless CAS retry. Move the challenge into the visible Chromium
-            # window and let the user complete the school's own login form.
-            progress(10, "正在重置旧 WebVPN 会话")
-            browser.send("reset", timeout=40)
-            session.authorize_login()
-            progress(50, "正在打开内嵌 WebVPN 登录页")
-            browser.send("open", timeout=40)
-            progress(100, "内嵌登录页已打开，可使用已保存的凭据自动登录；验证码请在页面中完成")
+            progress(5, "正在通过主程序重新连接 WebVPN（可能需要交互验证）")
+            current = session.reconnect(interactive_allowed=True)
+            if not current.is_authenticated:
+                raise RuntimeError(f"WebVPN 重新认证尚未完成：{current.reason}")
+            progress(80, "已获取共享会话，正在同步 Chromium")
+            if browser.state().get("running"):
+                browser.send("sync", timeout=40)
+            progress(100, "已载入共享 WebVPN 会话")
             return "/f-browser"
 
-        return {"task_id": tasks.start("WebVPN：打开内嵌登录页", worker).id}
+        return {"task_id": tasks.start("WebVPN：主程序重新连接", worker).id}
 
     @router.get("/api/f-browser/history")
     def history():
