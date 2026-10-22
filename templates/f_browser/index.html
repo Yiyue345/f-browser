@@ -8,82 +8,70 @@
 
 {% block content %}
 <section class="fb-app" data-f-browser>
-  <div class="fb-pagehead">
+  <header class="fb-header">
     <div>
       <h1>校园内网浏览器</h1>
-      <p>通过学校 WebVPN 访问校园服务。Chromium 在后台渲染，画面与操作直接显示在此页面；历史与收藏保存在本机。</p>
+      <p>在独立 Chromium 窗口访问 WebVPN 与校内网站</p>
     </div>
-    <div class="fb-connection">
+    <div class="fb-connection" role="status" aria-live="polite">
       <span class="fb-status-dot" id="fb-connection-dot" aria-hidden="true"></span>
       <span id="fb-connection-text">{{ webvpn_status.reason }}</span>
     </div>
-  </div>
+  </header>
 
-  <div class="fb-toolbar" aria-label="浏览器导航控制">
-    <div class="fb-navigation">
-      <button class="btn" type="button" data-fb-command="back" title="后退" aria-label="后退" disabled>←</button>
-      <button class="btn" type="button" data-fb-command="forward" title="前进" aria-label="前进" disabled>→</button>
-      <button class="btn" type="button" data-fb-command="reload" title="刷新" aria-label="刷新">↻</button>
+  <section class="fb-panel fb-browser" aria-label="浏览器控制">
+    <div class="fb-browser-head">
+      <button type="button" class="btn primary" data-fb-command="open">打开浏览器</button>
+      <span id="fb-browser-running" class="fb-meta">未启动</span>
+      <div class="fb-more">
+        <button type="button" class="btn" id="fb-more-toggle" aria-expanded="false" aria-controls="fb-more-menu">更多 ▾</button>
+        <div id="fb-more-menu" class="fb-more-menu" hidden>
+          <button type="button" id="fb-verify-gateway">校验 WebVPN 网关</button>
+          <button type="button" data-fb-command="sync">同步共享会话</button>
+          <button type="button" id="fb-reconnect">通过主程序重新连接</button>
+          <button type="button" data-fb-command="close">关闭浏览器</button>
+        </div>
+      </div>
     </div>
-    <form class="fb-address" id="fb-address-form" autocomplete="off">
-      <label class="sr-only" for="fb-address-input">WebVPN 网页地址</label>
-      <span aria-hidden="true">🔒</span>
-      <input type="url" id="fb-address-input" name="url" value="https://v.guet.edu.cn/"
-             placeholder="https://v.guet.edu.cn/" spellcheck="false" required>
-      <button type="submit" class="btn primary" data-fb-action>访问</button>
-    </form>
-    <button type="button" class="btn" id="fb-bookmark-current" title="收藏当前页面" aria-label="收藏当前页面">☆ 收藏</button>
-  </div>
+    <div class="fb-address-row">
+      <div class="fb-navigation">
+        <button type="button" class="btn" data-fb-command="back" disabled aria-label="后退" title="后退">←</button>
+        <button type="button" class="btn" data-fb-command="forward" disabled aria-label="前进" title="前进">→</button>
+        <button type="button" class="btn" data-fb-command="reload" aria-label="刷新" title="刷新">↻</button>
+      </div>
+      <form id="fb-address-form" class="fb-address" autocomplete="off">
+        <label class="sr-only" for="fb-address-input">WebVPN 地址</label>
+        <input id="fb-address-input" type="url" value="https://v.guet.edu.cn/"
+               placeholder="WebVPN 地址" spellcheck="false" required>
+        <button type="submit" class="btn" data-fb-action>访问</button>
+      </form>
+      <button type="button" class="btn" id="fb-bookmark-current" title="收藏当前页面">☆ 收藏</button>
+    </div>
+    <div class="fb-page-details">
+      <strong id="fb-page-title">尚未打开页面</strong>
+      <span id="fb-page-url" class="fb-page-url">网页将在独立 Chromium 窗口中打开</span>
+      <span id="fb-page-status" class="fb-meta">未启动</span>
+    </div>
+  </section>
 
-  <div class="fb-actions">
-    <button class="btn primary" type="button" data-fb-command="open">启动内嵌浏览器</button>
-    <button class="btn" type="button" id="fb-verify-gateway">校验 WebVPN 网关</button>
-    <button class="btn" type="button" id="fb-reconnect">重新登录（重置 WebVPN）</button>
-    <button class="btn" type="button" data-fb-command="close">关闭浏览器</button>
-    <a class="btn" href="https://v.guet.edu.cn/" target="_blank" rel="noopener noreferrer">在普通浏览器打开门户</a>
-  </div>
+  <div id="fb-feedback" class="fb-feedback" role="status" aria-live="polite" hidden></div>
 
-  <div class="fb-feedback" id="fb-feedback" role="status" aria-live="polite" hidden></div>
-
-  <div class="fb-content-grid">
-    <section class="fb-panel">
-      <div class="fb-panel-heading">
-        <h2>当前页面</h2>
-        <span class="fb-small" id="fb-browser-running">未启动</span>
+  <section class="fb-panel fb-records" aria-label="浏览记录与收藏">
+    <div class="fb-record-header">
+      <h2>浏览记录</h2>
+      <div class="fb-tabs" role="tablist" aria-label="浏览记录类别">
+        <button type="button" data-fb-tab="history" class="fb-tab is-active" role="tab" aria-selected="true">历史</button>
+        <button type="button" data-fb-tab="bookmarks" class="fb-tab" role="tab" aria-selected="false">收藏</button>
       </div>
-      <p id="fb-page-title" class="fb-document-title">还没有打开内网页面</p>
-      <p id="fb-page-url" class="fb-page-url">点击“启动内嵌浏览器”开始访问。</p>
-      <div class="fb-viewport" id="fb-viewport" role="application" aria-label="可交互的校园内网页面，点击后输入键盘文字" tabindex="0">
-        <img id="fb-frame-image" alt="Chromium 渲染的校园内网页面" width="1280" height="760" draggable="false" hidden>
-        <div class="fb-viewport-empty" id="fb-viewport-empty">
-          <span class="fb-window-symbol" aria-hidden="true">▣</span>
-          <strong>内嵌 Chromium 尚未启动</strong>
-          <span>启动后可在这里点击网页、输入文字、滚动和完成学校统一认证。</span>
-        </div>
-        <textarea id="fb-keyboard-input" class="fb-keyboard-bridge" aria-label="内嵌浏览器键盘输入" spellcheck="false" autocomplete="off"></textarea>
-      </div>
-      <p class="fb-small">校外通过 WebVPN 访问教务时，教务登录成功说明网关曾可用。之前的“尚未验证”可能只是状态未同步；现在进入页面会自动验证已保存的网关会话，也可以手动点击“校验 WebVPN 网关”。</p>
-      <p class="fb-small">内嵌模式通过 Chromium 截图与输入转发工作；目前支持点击、键盘和滚动，文件上传、网页剪贴板及复杂拖拽暂不支持。</p>
-    </section>
-
-    <section class="fb-panel">
-      <div class="fb-panel-heading">
-        <h2>访问记录</h2>
-        <div class="fb-tabs" role="tablist" aria-label="浏览数据">
-          <button type="button" class="fb-tab is-active" data-fb-tab="history" role="tab" aria-selected="true">历史</button>
-          <button type="button" class="fb-tab" data-fb-tab="bookmarks" role="tab" aria-selected="false">收藏</button>
-        </div>
-      </div>
-      <div class="fb-record-tools">
-        <input type="search" id="fb-record-search" placeholder="搜索页面标题或地址" aria-label="搜索浏览记录">
-        <button type="button" class="btn" id="fb-clear-history">清空历史</button>
-      </div>
-      <div id="fb-record-list" class="fb-record-list" aria-live="polite">
-        <p class="fb-small">正在读取记录…</p>
-      </div>
-      <p class="fb-small">只保存允许的 WebVPN 地址，并移除查询参数、锚点和临时认证令牌。</p>
-    </section>
-  </div>
+    </div>
+    <div class="fb-record-tools">
+      <input id="fb-record-search" type="search" placeholder="搜索标题或地址" aria-label="搜索记录">
+      <button type="button" class="btn" id="fb-clear-history">清空历史</button>
+    </div>
+    <div id="fb-record-list" class="fb-record-list" aria-live="polite">
+      <p class="fb-meta">正在读取记录…</p>
+    </div>
+  </section>
 </section>
-<script defer src="/plugins/webvpn_browser/static/browser.js?v=2"></script>
+<script defer src="/plugins/webvpn_browser/static/browser.js?v=3"></script>
 {% endblock %}
