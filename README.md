@@ -1,86 +1,58 @@
-# f-browser — FuckClassroom 校园内网浏览器
+# f-browser：校园 WebVPN 浏览器
 
-独立插件仓库：`Yiyue345/f-browser`。插件 ID：`webvpn_browser`，初始 Beta 版本 `0.1.0`。
+FuckClassroom 独立插件，插件 ID：`webvpn_browser`，开发分支 `dev`。
 
-本插件复用 FuckClassroom 主仓 **Issue #89 / `webvpn_session`** 公开接口，在本机的 Chromium 窗口里访问桂林电子科技大学 WebVPN。FuckClassroom 提供统一的控制页面，用于打开和关闭窗口、后退、前进、刷新、历史记录、收藏夹以及连接状态展示。
+**当前使用真正的可见 Chromium 窗口。** FuckClassroom 内只保留启动、导航状态、历史记录与收藏夹管理；学校网页由 Chromium 直接处理输入、滚动、文字选择、右键、复制粘贴、下载和文件上传。不再截屏回传网页，也不再转发鼠标键盘事件。
 
-## 前提
+## 依赖
 
-- 安装支持 Plugin API v1、具有 `context.services.get("webvpn_session")` 的 FuckClassroom 主仓版本。
-- 插件以可信任的 **`in_process`** 模式运行；不能改成 `process`，因为浏览器 Context 不能跨进程 RPC 传送。
-- 插件管理器需安装 Python 依赖 `playwright>=1.48`，并且首次运行前在 FuckClassroom 所使用的 Python 环境中执行：
+- 支持 Plugin API v1 和 `context.services.get("webvpn_session")` 的 FuckClassroom 主程序。
+- 可信的 `in_process` 插件运行方式；Playwright BrowserContext 不能通过跨进程 RPC 提供。
+- 主程序所在 Python 环境需要 `playwright`，并安装 Chromium：
 
-  ```bash
-  python -m playwright install chromium
-  ```
-
-  Chromium 需要本机图形桌面（Windows / Linux X11 / Wayland 等）。第一版不提供远程云浏览器或 iframe 嵌入模式。
-
-## 使用步骤
-
-1. 从本仓库的发行包或本地目录安装并启用 `webvpn_browser`。
-2. 在 FuckClassroom 侧栏打开「校园内网 → 内网浏览器」。
-3. 首次访问直接点击**打开浏览器窗口**：会先展示真实 Chromium，若学校要求 CAS、验证码或短信验证，就在此窗口中操作，不会先等待长时间的后台认证。若此前主动退出，请点击**重新连接 WebVPN**，它会重新授权会话并打开可交互的登录窗口。插件不会自行保存账号密码。
-4. 点击**打开浏览器窗口**，访问 WebVPN 门户，正常点击门户内的校园服务。必要时可在地址栏输入 `https://v.guet.edu.cn/` 下的完整链接。
-5. 使用工具栏操作后退、前进和刷新，也可使用独立 Chromium 自己的浏览器操作。访问历史、收藏夹记录在本机 SQLite。
-
-**使用说明：** 输入框只允许 HTTPS WebVPN 网关的安全地址；不允许输入任意外网、本机地址或者任意内网 IP。其他校园服务的网关编码链接必须从 WebVPN 门户获取，不能拼接本科教务的固定网关 URL 充当通用格式。
-
-## 安全与恢复
-
-- 账号、Cookie 和 CAS 验证过程完全由主仓的 WebVPN Session Broker 管理。浏览器 Context 使用 `new_browser_context` 创建，并通过 `save_browser_state` 的 session-generation CAS 差量保存；不会直接覆写 `storage_state.json`。
-- 历史/收藏数据库只储存网关域名内、删去全部 URL 查询参数和 fragment 的地址；登录、退出页面不入库。
-- 实际网页在单独 Chromium 窗口展示，FuckClassroom 控制页面只返回去敏 URL/标题，不传递 Cookie 和认证票据。
-- **首次打开浏览器不执行阻塞式无界面重登**；登录窗口先展示给用户，用户在 Chromium 完成学校认证后插件会异步保存并核验网关状态。
-- **仅在已有认证状态下出现网关/CAS 跳转，且主仓主动确认网关会话已失效后**，尝试一次自动恢复。检查和恢复在独立线程完成，不阻塞 Chromium 导航；普通校内目标网站 403 不触发重登。
-- 同一时间只允许一个浏览器导航命令；重复点击会立即返回明确提示，而不是排队到长超时。
-- 自动恢复后最多重新加载安全 GET 页面；不会自动重放 POST、报名、选课、评价、上传等带副作用操作。
-- 主动登出或账号切换后停止写回旧 Cookie。需要人工二次验证时由主程序接管；失败需要用户手动「重新连接」，不会无限重试。
-
-## 项目结构
-
-```text
-f-browser/
-├── plugin.json                    # 插件声明 / 运行依赖
-├── plugin.py                      # PluginSpec / 导航 / 生命周期
-├── browser.py                     # 专属线程、Playwright、会话恢复
-├── history.py                     # 本地 SQLite 历史/收藏
-├── routes.py                      # 同源 API 和任务管理
-├── templates/f_browser/index.html # FuckClassroom 浏览器控制页
-├── static/browser.js              # 导航、状态及任务进度
-├── static/browser.css             # 响应式 UI
-├── tests/                         # 无账号的回归测试
-└── scripts/build_registry_artifact.py
+```powershell
+python -m playwright install chromium
 ```
 
-## Alpha 发布策略
+需要有图形桌面的 Windows 或 Linux 环境。网页展示在独立 Chromium 窗口中，**不是嵌在 FuckClassroom 页面 DOM 中**。
 
-普通提交到 `dev` **只执行 Test plugin CI，不会创建新的 GitHub Release 或版本号**。
-这样可以在一次调试中连续提交修复，不会每提交一次就留下一个 Alpha。
+## 使用
 
-需要给测试人员安装一个新的 Alpha 时，手动在 GitHub 打开
-[Actions → Publish alpha](https://github.com/Yiyue345/f-browser/actions/workflows/alpha.yml)，
-点击 **Run workflow**，勾选 `publish`，再确认运行。
-工作流始终拉取当时最新的 `dev` 提交，重新运行单元测试、
-Jinja 校验、插件 ZIP 与 SHA-256 检查，成功后才生成一个 `v0.1.0-alpha.N` 预发布。
-若该提交已发布过 Alpha，则跳过重复发布。Alpha 序号只按实际发布过的版本递增。
+1. 安装并启用插件，打开侧栏「校园内网 → 内网浏览器」。
+2. 点击「打开浏览器」，Chromium 直接加载 `https://v.guet.edu.cn/`。
+3. 主仓已保存的 WebVPN Cookie 会经公开接口 `new_browser_context` 被载入。若还需认证，请在**主程序**完成 WebVPN 登录；如某个校园网站有自己的登录页，则在 Chromium 中正常操作。
+4. 主程序会话更新后，浏览器会按宿主认证状态变化创建新的 Context 并重新打开安全 GET 页面；也可在「更多 → 同步共享会话」主动同步。
+5. 控制页提供后退、前进、刷新、地址栏及当前页状态；历史与收藏只保存去除 query/fragment 的 WebVPN 安全地址。
+6. 「更多」中还有「校验 WebVPN 网关」「通过主程序重新连接」和「关闭浏览器」。重新连接调用主仓 WebVPN Session Broker，可能需要短信/验证码。
 
-该工作流也存在于 `main`，只是为了让 GitHub 显示手动执行按钮；
-它**只打包 dev，不会合并代码，不会触发 Beta**。 `main` 的 Beta 发布规则不受影响。
-之前已经生成的 Alpha 记录不会自动删除，以免破坏已有下载链接。
+WebVPN 网关登录和校内网站登录是不同阶段。**校内网站登录页面不是 WebVPN 网关过期的证据**；插件不会根据校园网站的登录页进行自动恢复或再次提交账号密码。
 
-## 本地验证
+## 架构
 
-```bash
-python -m unittest discover -s tests -v
-python scripts/build_registry_artifact.py 0.1.0-beta.1
+- `browser.py`：单专用线程、可见 Chromium、主程序共享 Session Broker 接入、导航和生命周期事件。
+- `gateway_status.py`：对主仓 `get_status()` 的未验证状态在后台执行一次 `verify()`，不会负责登录。
+- `routes.py`：同源控制 API 与主程序 TaskManager，**没有截图和远程输入 API**。
+- `templates/f_browser/index.html`、`static/browser.js`、`static/browser.css`：精简控制 UI。
+- `history.py`：本地 SQLite 历史记录和收藏。
+- `tests/`：模拟真实导航事件、登录页标题、窗口弹出/关闭、共享会话更新与 POST 安全限制。
+- `scripts/build_registry_artifact.py`：Registry v1 ZIP 和 SHA-256 文件。
+
+Playwright 的 `framenavigated`、`domcontentloaded`、`load` 和 `close` 事件负责即时更新标题、地址及页面状态。宿主会话检查和自动保存按较低频率进行；控制页仅低频读取最新状态，不传输网页画面。
+
+## 测试与版本发布
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-CI 校验 manifest、Python 编译、Jinja 模板、无真实账号的导航/恢复/历史回归测试和 ZIP 校验和；主仓接口集成以及学校真实 CAS/短信认证仍需在本机进行端到端验收。
+- `dev` 的普通提交只触发 **Test plugin**，不自动生成 Alpha。
+- 需要测试包时，进入 [Actions → Publish alpha](https://github.com/Yiyue345/f-browser/actions/workflows/alpha.yml)，手动勾选 `publish` 后生成一个 Alpha。
+- `main` 保持独立 Beta 发布流程，**不会自动合并 dev 到 main**。
+- 本机学校网络、CAS/短信、目标网站登录及文件上传仍需实机回归。
 
-## 当前限制
+## 安全边界
 
-- 第一版是**独立 Chromium 窗口**，不是把校内网页嵌入 FuckClassroom 页面；学校网站通常有 CSP/X-Frame-Options，iframe 并不可靠。
-- 控制界面追踪当前活动网页，并跟随学校门户弹出的新页面；它不提供完整的多标签管理器。
-- 没有破解、规避或代替学校登录验证，也不会在未授权网络环境中提供通用内网代理。
-- Registry 网站上架与真实环境验收应在首次 Beta 发布后进行。
+- 插件不读取、导出、保存主仓的账号密码，不再调用 CAS 自动填表或 `ensure_authenticated()` 登录流程。
+- WebVPN Cookie 生命周期由宿主 Session Broker 管理，创建 Context 用 `new_browser_context()`，保存用 `save_browser_state()`。
+- 检测到宿主认证变化后，丢弃旧 BrowserContext 时**不保存过期 Cookie**；同步只允许重新加载安全 GET，不重放 POST、选课或上传提交。
+- 校内登录页的网址可在控制页脱敏显示，但不会纳入持久化浏览历史。
