@@ -267,6 +267,95 @@ class BrowserControllerTests(unittest.TestCase):
         )
         return worker, session, store
 
+    def test_known_guet_cas_forwarded_url_is_recognized_only_on_allowlist(self):
+        cas = (
+            "https://v.guet.edu.cn/https/"
+            "77726476706e69737468656265737421f3f652d220256d44300d8db9d6562d"
+            "/authserver/login"
+        )
+        self.assertTrue(browser._gateway_login_url(cas + "?ticket=REDACTED"))
+        self.assertFalse(browser._gateway_login_url(
+            "https://v.guet.edu.cn/https/other-app/authserver/login"
+        ))
+        self.assertFalse(browser._gateway_login_url("http://" + cas.removeprefix("https://")))
+
+    def test_screenshot_does_not_reject_single_click(self):
+        from concurrent.futures import ThreadPoolExecutor
+        worker, session, _ = self.make()
+        entered, release = threading.Event(), threading.Event()
+        try:
+            worker.send("open")
+            page = session.browser.contexts[-1].page
+            def capture(**kwargs):
+                entered.set()
+                if not release.wait(2):
+                    raise RuntimeError("screenshot fixture timed out")
+                return b"FRAME"
+            page.screenshot = capture
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                frame = pool.submit(worker.send, "screenshot", timeout=3)
+                self.assertTrue(entered.wait(1))
+                click = pool.submit(worker.send, "input", {
+                    "type": "click", "x": 100, "y": 100
+                }, timeout=3)
+                time.sleep(.06)
+                release.set()
+                self.assertEqual(frame.result(timeout=3), b"FRAME")
+                click.result(timeout=3)
+            self.assertEqual(page.mouse.clicks, [(100.0, 100.0)])
+        finally:
+            release.set()
+            worker.stop()
+
+    def test_repeated_screenshots_do_not_starve_cas_autofill(self):
+        worker, session, _ = self.make()
+        session.state = "login_required"
+        try:
+            worker.send("open")
+            page = session.browser.contexts[-1].page
+            page.goto("https://cas.guet.edu.cn/authserver/login")
+            started = time.monotonic()
+            while time.monotonic() - started < .7:
+                worker.send("screenshot", timeout=2)
+                time.sleep(.04)
+            self.assertGreaterEqual(session.autofill_calls, 1)
+        finally:
+            worker.stop()
+
+    def test_new_shared_auth_replaces_existing_context_without_saving_old_cookies(self):
+        worker, session, _ = self.make()
+        session.state = "unknown"
+        try:
+            worker.send("open")
+            worker.send("navigate", "https://v.guet.edu.cn/https/course")
+            previous = session.browser.contexts[-1]
+            old_save = session.saves
+            worker._last_save = time.monotonic()
+            session.state = "authenticated"
+            self.assertTrue(self.wait_until(lambda: len(session.browser.contexts) == 2, timeout=2))
+            self.assertEqual(session.browser.contexts[-1].page.url,
+                             "https://v.guet.edu.cn/https/course")
+            self.assertTrue(previous.page.is_closed())
+            self.assertTrue(worker._allow_auto_recovery)
+            self.assertEqual(session.saves, old_save)
+        finally:
+            worker.stop()
+
+    def test_shared_auth_does_not_replay_post_document(self):
+        worker, session, _ = self.make()
+        session.state = "unknown"
+        try:
+            worker.send("open")
+            old = session.browser.contexts[-1].page
+            old._travel("https://v.guet.edu.cn/https/submit-result", method="POST")
+            worker._last_save = time.monotonic()
+            session.state = "authenticated"
+            self.assertTrue(self.wait_until(lambda: len(session.browser.contexts) == 2, timeout=2))
+            self.assertEqual(session.browser.contexts[-1].page.url, "https://v.guet.edu.cn/")
+            self.assertNotIn("submit-result", str(session.browser.contexts[-1].page.loads))
+        finally:
+            worker.stop()
+
     def test_embedded_screenshot_and_click_keyboard_scroll(self):
         worker, session, _ = self.make()
         try:
