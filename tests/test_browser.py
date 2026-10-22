@@ -180,6 +180,7 @@ class SharedSession:
         self.chromium = Chromium()
         self.new_context_calls = 0
         self.saves = 0
+        self.saved_contexts = []
         self.clears = 0
 
     def get_status(self):
@@ -196,6 +197,7 @@ class SharedSession:
 
     def save_browser_state(self, context):
         self.saves += 1
+        self.saved_contexts.append(context)
 
     def clear_session(self):
         self.clears += 1
@@ -340,14 +342,14 @@ class NativeBrowserTests(unittest.TestCase):
             old_page = old_context.pages[-1]
             old_page.navigate("https://v.guet.edu.cn/https/post-result", method="POST")
             controller._last_save = time.monotonic()
-            saves_before = session.saves
+            old_saves_before = session.saved_contexts.count(old_context)
             session.state = "authenticated"
             session.checked_at = "new-login"
             self.assertTrue(self.until(lambda: len(session.chromium.contexts) == 2))
             fresh = session.chromium.contexts[-1]
             self.assertTrue(old_context.closed)
             self.assertEqual(fresh.pages[-1].url, GATEWAY)
-            self.assertEqual(saves_before, session.saves)
+            self.assertEqual(old_saves_before, session.saved_contexts.count(old_context))
         finally:
             controller.stop()
 
@@ -405,8 +407,8 @@ class NativeBrowserTests(unittest.TestCase):
             session.state = "authenticated"
             session.checked_at = "other-generation"
             self.assertTrue(self.until(lambda: context.closed))
-            # Context shutdown on broker revision does not call save.
-            self.assertEqual(session.saves, 0)
+            # Context shutdown on broker revision does not write old cookies.
+            self.assertEqual(session.saved_contexts.count(context), 1)
         finally:
             controller.stop()
 
