@@ -475,7 +475,11 @@ class BrowserController:
             )
         except Exception:
             # Authentication and intermediate CAS pages must never be sent to UI.
-            self._set(running=True, title="正在验证或跳转", url="", can_back=False, can_forward=False)
+            self._set(
+                running=True,
+                title="学校统一身份认证" if _gateway_login_url(str(page.url)) else "正在验证或跳转",
+                url="", can_back=False, can_forward=False,
+            )
 
     def _idle(self) -> None:
         if self._page is None:
@@ -543,6 +547,8 @@ class BrowserController:
             self._build_context()
             self._allow_auto_recovery = True
             self._goto(target)
+            with self._lock:
+                self._frame_cache = None
             self._set(
                 recovery="idle",
                 message="已载入主程序更新后的 WebVPN 会话",
