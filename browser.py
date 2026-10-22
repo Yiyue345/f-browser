@@ -432,12 +432,12 @@ class BrowserController:
                 self.session.save_browser_state(self._context)
             except Exception:
                 # A generation mismatch means another module replaced the
-                # session. Never overwrite its fresh cookies.
-                self._close_context(save=False)
-                self._set(
-                    running=False, page_status="closed",
-                    message="主程序登录会话已变更，旧浏览器已关闭以保护新会话",
-                )
+                # session. Never write stale cookies back. Reload a clean
+                # broker-owned snapshot; if login is still in progress the
+                # browser stays usable and the next confirmed status update
+                # refreshes it again.
+                self._refresh_context(force=True)
+                self._set(message="共享会话发生变化，已重新载入主程序会话")
 
     def _close_context(self, *, save):
         context = self._context
