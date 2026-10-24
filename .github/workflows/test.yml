@@ -1,0 +1,55 @@
+name: Test plugin
+
+on:
+  push:
+    branches: ["main", "plugin-management"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation dependencies
+        run: python -m pip install packaging jinja2
+      - name: Validate manifest
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          from packaging.specifiers import SpecifierSet
+          from packaging.version import Version
+          data = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
+          assert data["id"] == "webvpn_browser"
+          assert data["execution"] == "in_process"
+          assert data["api_version"] == 1
+          assert data["requires"] == []
+          assert data["rpc_api_version"] is None
+          assert data["rpc_permissions"] == []
+          assert SpecifierSet(data["app_requires"]).contains(Version("0.2.0.dev0"), prereleases=True)
+      - name: Check Python syntax
+        run: python -m compileall -q __init__.py plugin.py browser.py history.py routes.py scripts tests
+      - name: Check stable plugin boundary
+        shell: bash
+        run: |
+          if grep -REn 'from \.\.(\.|[A-Za-z_])' --include='*.py' . --exclude-dir=.git; then
+            echo "External plugins must not import host source through parent-relative paths" >&2
+            exit 1
+          fi
+      - name: Run browser tests
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python - <<'PY'
+          from jinja2 import Environment
+          from pathlib import Path
+          Environment().parse(Path("templates/f_browser/index.html").read_text(encoding="utf-8"))
+          print("Template syntax valid")
+          PY
+      - name: Registry ZIP smoke test
+        run: |
+          python scripts/build_registry_artifact.py 0.1.0-ci.0
+          sha256sum -c webvpn_browser-0.1.0-ci.0.zip.sha256

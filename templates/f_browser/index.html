@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% set ui_page = "webvpn_browser" %}
+{% set active_system = "webvpn_browser" %}
+{% set active_nav = "webvpn_browser" %}
+
+{% block title %}校园内网浏览器 · FuckClassroom{% endblock %}
+{% block page_title %}校园内网浏览器{% endblock %}
+
+{% block content %}
+<section class="fb-app" data-f-browser>
+  <div class="fb-pagehead">
+    <div>
+      <h1>校园内网浏览器</h1>
+      <p>通过学校 WebVPN 访问校园服务。网页在独立 Chromium 窗口打开，历史与收藏保存在本机。</p>
+    </div>
+    <div class="fb-connection">
+      <span class="fb-status-dot" id="fb-connection-dot" aria-hidden="true"></span>
+      <span id="fb-connection-text">{{ webvpn_status.reason }}</span>
+    </div>
+  </div>
+
+  <div class="fb-toolbar" aria-label="浏览器导航控制">
+    <div class="fb-navigation">
+      <button class="btn" type="button" data-fb-command="back" title="后退" aria-label="后退" disabled>←</button>
+      <button class="btn" type="button" data-fb-command="forward" title="前进" aria-label="前进" disabled>→</button>
+      <button class="btn" type="button" data-fb-command="reload" title="刷新" aria-label="刷新">↻</button>
+    </div>
+    <form class="fb-address" id="fb-address-form" autocomplete="off">
+      <label class="sr-only" for="fb-address-input">WebVPN 网页地址</label>
+      <span aria-hidden="true">🔒</span>
+      <input type="url" id="fb-address-input" name="url" value="https://v.guet.edu.cn/"
+             placeholder="https://v.guet.edu.cn/" spellcheck="false" required>
+      <button type="submit" class="btn primary" data-fb-action>访问</button>
+    </form>
+    <button type="button" class="btn" id="fb-bookmark-current" title="收藏当前页面" aria-label="收藏当前页面">☆ 收藏</button>
+  </div>
+
+  <div class="fb-actions">
+    <button class="btn primary" type="button" data-fb-command="open">打开浏览器窗口</button>
+    <button class="btn" type="button" id="fb-reconnect">重新连接 WebVPN</button>
+    <button class="btn" type="button" data-fb-command="close">关闭浏览器窗口</button>
+    <a class="btn" href="https://v.guet.edu.cn/" target="_blank" rel="noopener noreferrer">在普通浏览器打开门户</a>
+  </div>
+
+  <div class="fb-feedback" id="fb-feedback" role="status" aria-live="polite" hidden></div>
+
+  <div class="fb-content-grid">
+    <section class="fb-panel">
+      <div class="fb-panel-heading">
+        <h2>当前页面</h2>
+        <span class="fb-small" id="fb-browser-running">未启动</span>
+      </div>
+      <p id="fb-page-title" class="fb-document-title">还没有打开内网页面</p>
+      <p id="fb-page-url" class="fb-page-url">点击“打开浏览器窗口”开始访问。</p>
+      <div class="fb-preview">
+        <div class="fb-window-symbol" aria-hidden="true">▣</div>
+        <p>校园网页在独立 Chromium 窗口中显示</p>
+        <p class="fb-small">支持网页自己的表单、下载、前进后退和复杂脚本。学校网页不需要支持 iframe 嵌入。</p>
+      </div>
+      <p class="fb-small">需要学校 CAS、短信或图形验证码时，请直接在弹出的 Chromium 登录窗口中完成。首次打开不再等待后台无界面登录。</p>
+    </section>
+
+    <section class="fb-panel">
+      <div class="fb-panel-heading">
+        <h2>访问记录</h2>
+        <div class="fb-tabs" role="tablist" aria-label="浏览数据">
+          <button type="button" class="fb-tab is-active" data-fb-tab="history" role="tab" aria-selected="true">历史</button>
+          <button type="button" class="fb-tab" data-fb-tab="bookmarks" role="tab" aria-selected="false">收藏</button>
+        </div>
+      </div>
+      <div class="fb-record-tools">
+        <input type="search" id="fb-record-search" placeholder="搜索页面标题或地址" aria-label="搜索浏览记录">
+        <button type="button" class="btn" id="fb-clear-history">清空历史</button>
+      </div>
+      <div id="fb-record-list" class="fb-record-list" aria-live="polite">
+        <p class="fb-small">正在读取记录…</p>
+      </div>
+      <p class="fb-small">只保存允许的 WebVPN 地址，并移除查询参数、锚点和临时认证令牌。</p>
+    </section>
+  </div>
+</section>
+<script defer src="/plugins/webvpn_browser/static/browser.js?v=1"></script>
+{% endblock %}
